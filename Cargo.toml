@@ -1,0 +1,12 @@
+[package]
+name = "web-sdl2-test"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.70"
+sdl2 = "0.35.2"
+
+[profile.release]
+opt-level = "s"
+strip = "symbols"
