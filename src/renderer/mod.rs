@@ -1,9 +1,6 @@
 use std::ffi::c_void;
 
-use sdl2::video::Window;
-use sdl2::VideoSubsystem;
-
-mod gl;
+pub mod gl;
 
 const POSITION: u32 = 1;
 const TEST_TRIANGLE_VERTEX_SHADER: &str = r#"#version 300 es
@@ -37,12 +34,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    pub fn new(video: &VideoSubsystem, window: &Window) -> Renderer {
-        gl::load_with(|s| video.gl_get_proc_address(s) as *const core::ffi::c_void);
-        video.gl_set_swap_interval(1).unwrap();
-        let (w, h) = window.drawable_size();
-        gl::call!(gl::Viewport(0, 0, w as i32, h as i32));
-
+    pub fn new() -> Renderer {
         let mut vao = 0;
         let mut vbo = 0;
         gl::call!(gl::GenVertexArrays(1, &mut vao));
@@ -68,10 +60,6 @@ impl Renderer {
         gl::call!(gl::DeleteShader(fragment_shader));
 
         Renderer { vao, vbo, program }
-    }
-
-    pub fn resize(&mut self, width: i32, height: i32) {
-        gl::call!(gl::Viewport(0, 0, width, height));
     }
 
     pub fn render(&mut self) {

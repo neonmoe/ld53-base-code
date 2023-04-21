@@ -1,4 +1,4 @@
-use core::ffi::{c_int};
+use std::ffi::{c_char, c_int, CString};
 
 pub fn set_main_loop(func: EmCallbackFunc) -> ! {
     unsafe { emscripten_set_main_loop(func, 0, 1) };
@@ -9,6 +9,13 @@ pub fn set_main_loop(func: EmCallbackFunc) -> ! {
     loop {}
 }
 
+pub fn run_javascript(script: &str) {
+    let mut script = Vec::from(script.as_bytes());
+    script.push(0);
+    let script = CString::from_vec_with_nul(script).unwrap();
+    unsafe { emscripten_run_script(script.as_c_str().as_ptr()) };
+}
+
 pub type EmCallbackFunc = extern "C" fn();
 extern "C" {
     /// https://emscripten.org/docs/api_reference/emscripten.h.html#c.emscripten_set_main_loop
@@ -17,4 +24,7 @@ extern "C" {
         fps: c_int,
         simulate_infinite_loop: c_int,
     );
+
+    /// https://emscripten.org/docs/api_reference/emscripten.h.html#c.emscripten_run_script
+    pub fn emscripten_run_script(script: *const c_char);
 }

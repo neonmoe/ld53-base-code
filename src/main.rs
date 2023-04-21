@@ -7,7 +7,7 @@ use sdl2::event::{Event, WindowEvent};
 use sdl2::rect::Point;
 use sdl2::sys::{SDL_Event, SDL_EventType, SDL_KeyCode};
 use sdl2::video::{GLProfile, Window};
-use sdl2::{EventPump, VideoSubsystem};
+use sdl2::EventPump;
 
 #[cfg(target_family = "wasm")]
 mod emscripten_h;
@@ -17,18 +17,33 @@ use renderer::Renderer;
 
 fn main() -> anyhow::Result<()> {
     let sdl_context = sdl2::init().map_err(SdlErr)?;
-    let video_subsystem = sdl_context.video().map_err(SdlErr)?;
-    let gl_attr = video_subsystem.gl_attr();
+    let video = sdl_context.video().map_err(SdlErr)?;
+    let gl_attr = video.gl_attr();
     gl_attr.set_context_profile(GLProfile::GLES);
     gl_attr.set_context_version(3, 0);
     // Linear->SRGB conversion is done in shader, thanks to lacking WebGL support.
     gl_attr.set_framebuffer_srgb_compatible(false);
-    let window = video_subsystem
+    let window = video
         .window(env!("CARGO_PKG_NAME"), 948, 533)
         .resizable()
         .opengl()
         .build()?;
     let _gl_context = window.gl_create_context().map_err(SdlErr)?;
+
+    {
+        // Set up OpenGL, draw a "loading screen"
+        use renderer::gl;
+
+        gl::load_with(|s| video.gl_get_proc_address(s) as *const core::ffi::c_void);
+        video.gl_set_swap_interval(1).unwrap();
+        let (w, h) = window.drawable_size();
+        gl::call!(gl::Viewport(0, 0, w as i32, h as i32));
+
+        gl::call!(gl::ClearColor(0.2, 0.6, 0.2, 1.0));
+        gl::call!(gl::Clear(gl::COLOR_BUFFER_BIT));
+        window.gl_swap_window();
+    }
+
     let event_pump = sdl_context.event_pump().map_err(SdlErr)?;
 
     // Set up an event filter to avoid too eager preventDefault()s on
@@ -58,10 +73,13 @@ fn main() -> anyhow::Result<()> {
     }
     unsafe { sdl2::sys::SDL_SetEventFilter(Some(event_filter), ptr::null_mut()) };
 
-    unsafe { STATE = Some(State::new(video_subsystem, window, event_pump)) };
+    unsafe { STATE = Some(State::new(window, event_pump)) };
 
     #[cfg(target_family = "wasm")]
-    emscripten_h::set_main_loop(run_frame);
+    {
+        emscripten_h::run_javascript("document.getElementById('browser-support-warning').remove()");
+        emscripten_h::set_main_loop(run_frame);
+    }
     #[cfg(not(target_family = "wasm"))]
     loop {
         run_frame()
@@ -78,9 +96,9 @@ struct State {
 }
 
 impl State {
-    pub fn new(video: VideoSubsystem, window: Window, event_pump: EventPump) -> State {
+    pub fn new(window: Window, event_pump: EventPump) -> State {
         State {
-            renderer: Renderer::new(&video, &window),
+            renderer: Renderer::new(),
             window,
             event_pump,
             mouse_position: Point::new(0, 0),
@@ -101,7 +119,10 @@ extern "C" fn run_frame() {
         match event {
             Event::Quit { .. } => std::process::exit(0),
             Event::Window { win_event, .. } => match win_event {
-                WindowEvent::Resized(w, h) => renderer.resize(w, h),
+                WindowEvent::Resized(w, h) => {
+                    use renderer::gl;
+                    gl::call!(gl::Viewport(0, 0, w, h));
+                }
                 _ => {}
             },
             Event::MouseMotion { x, y, .. } => *mouse_position = Point::new(x, y),

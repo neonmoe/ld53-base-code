@@ -3,11 +3,33 @@
     <head>
         <meta charset="utf-8">
         <style>
-          body, html { margin: 0; padding: 0; overflow: hidden; }
-          canvas { margin: auto; width: 948px; height: 533px; }
+            body, html {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                color-scheme: light dark;
+            }
+            canvas { width: 100vw; height: 100vh; }
+            #browser-support-warning {
+                max-width: 640px;
+                margin: auto;
+                padding-left: 1em;
+                padding-right: 1em;
+            }
         </style>
     </head>
     <body>
+        <div id="browser-support-warning">
+            <p>
+                This game requires WebGL 2 and WebAssembly support to run in a
+                browser. The newest versions of Firefox, Chrome, and Safari should
+                support these.
+            </p>
+            <p>
+                There are downloadable desktop versions of the game available as
+                well.
+            </p>
+        </div>
         <canvas id ="canvas"></canvas>
         <script type="text/javascript">var Module = { canvas: document.getElementById("canvas") };</script>
         <script src="web-sdl2-test.js"></script>
