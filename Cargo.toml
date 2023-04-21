@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.70"
+bytemuck = "1.13.1"
 sdl2 = "0.35.2"
 
-[profile.release]
-opt-level = "s"
-strip = "symbols"
+[build-dependencies]
+gl_generator = "0.14.0"
