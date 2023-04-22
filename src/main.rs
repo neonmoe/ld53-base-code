@@ -131,7 +131,8 @@ extern "C" fn run_frame() {
         }
     }
 
-    renderer.render();
+    let (w, h) = window.drawable_size();
+    renderer.render(w as f32 / h as f32);
     window.gl_swap_window();
 }
 

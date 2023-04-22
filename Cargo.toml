@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.70"
 bytemuck = "1.13.1"
+glam = "0.23.0"
 sdl2 = "0.35.2"
 
 [build-dependencies]

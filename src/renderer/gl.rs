@@ -34,7 +34,7 @@ macro_rules! call {
 }
 pub(crate) use call;
 
-use std::ffi::c_void;
+use std::ffi::{c_void, CString};
 
 pub fn buffer_data_f32(target: types::GLenum, data: &[f32], usage: types::GLenum) {
     let data: &[u8] = bytemuck::cast_slice(&data);
@@ -70,7 +70,12 @@ pub fn create_shader(type_: types::GLenum, shader_source: &str) -> u32 {
             info_log.as_mut_ptr() as *mut i8,
         ));
         let info_log = std::str::from_utf8(&info_log[..length as usize]).unwrap();
-        panic!("Shader compilation failed: {info_log}");
+        let shader_type = match type_ {
+            VERTEX_SHADER => "Vertex ",
+            FRAGMENT_SHADER => "Fragment ",
+            _ => "",
+        };
+        panic!("{shader_type}shader compilation failed: {info_log}",);
     }
     shader
 }
@@ -97,4 +102,14 @@ pub fn create_program(shaders: &[u32]) -> u32 {
         panic!("Linking shader program failed: {info_log}");
     }
     program
+}
+
+pub fn get_uniform_location(program: u32, name: &str) -> Option<i32> {
+    let name = CString::from_vec_with_nul(format!("{name}\0").into_bytes()).unwrap();
+    let location = call!(GetUniformLocation(program, name.as_ptr()));
+    if location == -1 {
+        None
+    } else {
+        Some(location)
+    }
 }
