@@ -21,6 +21,8 @@ fn main() -> anyhow::Result<()> {
     let gl_attr = video.gl_attr();
     gl_attr.set_context_profile(GLProfile::GLES);
     gl_attr.set_context_version(3, 0);
+    gl_attr.set_multisample_buffers(1);
+    gl_attr.set_multisample_samples(4);
     // Linear->SRGB conversion is done in shader, thanks to lacking WebGL support.
     gl_attr.set_framebuffer_srgb_compatible(false);
     let window = video
