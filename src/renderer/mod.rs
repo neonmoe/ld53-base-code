@@ -1,10 +1,12 @@
+use glam::Mat4;
 use std::f32::consts::TAU;
 use std::ffi::c_void;
 
-use glam::Mat4;
-
+mod draw_calls;
 pub mod gl;
-mod gltf;
+pub mod gltf;
+
+pub use draw_calls::DrawCalls;
 
 const ATTR_POSITION: u32 = 1;
 
@@ -34,6 +36,7 @@ void main() {
 "#;
 
 pub struct Renderer {
+    test_model: gltf::Gltf,
     vao: u32,
     vbo: u32,
     program: u32,
@@ -47,6 +50,7 @@ impl Renderer {
         gl::call!(gl::GenVertexArrays(1, &mut vao));
         gl::call!(gl::GenBuffers(1, &mut vbo));
         gl::call!(gl::BindVertexArray(vao));
+        gl::call!(gl::EnableVertexAttribArray(ATTR_POSITION));
         gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, vbo));
         let data: [f32; 9] = [0.5, -0.5, 2.0, -0.5, -0.5, 2.0, 0.0, 0.5, 2.0];
         gl::buffer_data_f32(gl::ARRAY_BUFFER, &data, gl::STATIC_DRAW);
@@ -69,7 +73,36 @@ impl Renderer {
         gl::call!(gl::DeleteShader(vertex_shader));
         gl::call!(gl::DeleteShader(fragment_shader));
 
+        macro_rules! boom_box_path {
+            ($lit:literal) => {
+                concat!(
+                    "../../resources/models/testing-static/BoomBoxWithAxes",
+                    $lit
+                )
+            };
+        }
+        macro_rules! boom_box_resource {
+            ($lit:literal) => {
+                (
+                    concat!("BoomBoxWithAxes", $lit),
+                    include_bytes!(boom_box_path!($lit)),
+                )
+            };
+        }
+        let test_model = gltf::load_gltf(
+            include_str!(boom_box_path!(".gltf")),
+            &[
+                boom_box_resource!(".bin"),
+                boom_box_resource!("_baseColor.png"),
+                boom_box_resource!("_baseColor1.png"),
+                boom_box_resource!("_emissive.png"),
+                boom_box_resource!("_normal.png"),
+                boom_box_resource!("_roughnessMetallic.png"),
+            ],
+        );
+
         Renderer {
+            test_model,
             vao,
             vbo,
             program,
@@ -78,18 +111,22 @@ impl Renderer {
     }
 
     pub fn render(&mut self, aspect_ratio: f32) {
+        let mut draw_calls = DrawCalls::new();
+        self.test_model.collect_draw_calls(&mut draw_calls);
+
         gl::call!(gl::ClearColor(0.0, 0.0, 0.0, 1.0));
         gl::call!(gl::ClearDepthf(0.0));
         gl::call!(gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT));
         gl::call!(gl::Enable(gl::DEPTH_TEST));
         gl::call!(gl::DepthFunc(gl::GREATER));
+
+        // TODO: Draw the draw calls
+
         gl::call!(gl::UseProgram(self.program));
         let view_from_world = Mat4::IDENTITY;
-
         // OpenGL clip space: right-handed, +X right, +Y up, +Z backward (out of screen).
         // GLTF:              right-handed, +X left, +Y up, +Z forward (into the screen).
         let to_opengl_basis = Mat4::from_rotation_y(TAU / 2.0);
-
         let proj_from_view = Mat4::perspective_rh_gl(74f32.to_radians(), aspect_ratio, 100.0, 0.3);
         let proj_view_matrix = (proj_from_view * to_opengl_basis * view_from_world).to_cols_array();
         gl::call!(gl::UniformMatrix4fv(
@@ -99,7 +136,6 @@ impl Renderer {
             proj_view_matrix.as_ptr()
         ));
         gl::call!(gl::BindVertexArray(self.vao));
-        gl::call!(gl::EnableVertexAttribArray(ATTR_POSITION));
         gl::call!(gl::DrawArrays(gl::TRIANGLES, 0, 3));
     }
 }
