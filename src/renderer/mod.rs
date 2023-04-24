@@ -1,17 +1,16 @@
-use glam::Mat4;
+use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::TAU;
 use std::ffi::c_void;
 
+mod bumpalloc_buffer;
 mod draw_calls;
 pub mod gl;
 pub mod gltf;
 
 pub use draw_calls::DrawCalls;
 
-const ATTR_POSITION: u32 = 1;
-
 const TEST_TRIANGLE_VERTEX_SHADER: &str = r#"#version 300 es
-layout(location = 1) in vec3 ATTR_POSITION;
+layout(location = 0) in vec3 ATTR_POSITION;
 out vec3 vertex_color;
 uniform mat4 projViewMatrix;
 void main() {
@@ -37,42 +36,12 @@ void main() {
 
 pub struct Renderer {
     test_model: gltf::Gltf,
-    vao: u32,
-    vbo: u32,
-    program: u32,
-    proj_view_matrix_location: i32,
+    gltf_shader: gltf::ShaderProgram,
+    draw_calls: DrawCalls,
 }
 
 impl Renderer {
     pub fn new() -> Renderer {
-        let mut vao = 0;
-        let mut vbo = 0;
-        gl::call!(gl::GenVertexArrays(1, &mut vao));
-        gl::call!(gl::GenBuffers(1, &mut vbo));
-        gl::call!(gl::BindVertexArray(vao));
-        gl::call!(gl::EnableVertexAttribArray(ATTR_POSITION));
-        gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, vbo));
-        let data: [f32; 9] = [0.5, -0.5, 2.0, -0.5, -0.5, 2.0, 0.0, 0.5, 2.0];
-        gl::buffer_data_f32(gl::ARRAY_BUFFER, &data, gl::STATIC_DRAW);
-        gl::call!(gl::VertexAttribPointer(
-            ATTR_POSITION,
-            3,
-            gl::FLOAT,
-            gl::FALSE,
-            0,
-            0 as *const c_void
-        ));
-
-        let vertex_shader = gl::create_shader(gl::VERTEX_SHADER, TEST_TRIANGLE_VERTEX_SHADER);
-        let fragment_shader = gl::create_shader(gl::FRAGMENT_SHADER, TEST_TRIANGLE_FRAGMENT_SHADER);
-        let program = gl::create_program(&[vertex_shader, fragment_shader]);
-        gl::call!(gl::UseProgram(program));
-        let proj_view_matrix_location =
-            gl::get_uniform_location(program, "projViewMatrix").unwrap();
-
-        gl::call!(gl::DeleteShader(vertex_shader));
-        gl::call!(gl::DeleteShader(fragment_shader));
-
         macro_rules! boom_box_path {
             ($lit:literal) => {
                 concat!(
@@ -100,19 +69,25 @@ impl Renderer {
                 boom_box_resource!("_roughnessMetallic.png"),
             ],
         );
-
+        let gltf_shader = gltf::create_program();
+        let draw_calls = DrawCalls::new();
         Renderer {
             test_model,
-            vao,
-            vbo,
-            program,
-            proj_view_matrix_location,
+            gltf_shader,
+            draw_calls,
         }
     }
 
     pub fn render(&mut self, aspect_ratio: f32) {
-        let mut draw_calls = DrawCalls::new();
-        self.test_model.collect_draw_calls(&mut draw_calls);
+        self.draw_calls.clear();
+        self.test_model.draw(
+            &mut self.draw_calls,
+            Mat4::from_scale_rotation_translation(
+                Vec3::splat(100.0), // Apparently the model is just tiny, in Blender too
+                Quat::IDENTITY,
+                Vec3::new(0.0, 0.0, 5.0),
+            ),
+        );
 
         gl::call!(gl::ClearColor(0.0, 0.0, 0.0, 1.0));
         gl::call!(gl::ClearDepthf(0.0));
@@ -120,30 +95,21 @@ impl Renderer {
         gl::call!(gl::Enable(gl::DEPTH_TEST));
         gl::call!(gl::DepthFunc(gl::GREATER));
 
-        // TODO: Draw the draw calls
-
-        gl::call!(gl::UseProgram(self.program));
         let view_from_world = Mat4::IDENTITY;
         // OpenGL clip space: right-handed, +X right, +Y up, +Z backward (out of screen).
         // GLTF:              right-handed, +X left, +Y up, +Z forward (into the screen).
         let to_opengl_basis = Mat4::from_rotation_y(TAU / 2.0);
         let proj_from_view = Mat4::perspective_rh_gl(74f32.to_radians(), aspect_ratio, 100.0, 0.3);
         let proj_view_matrix = (proj_from_view * to_opengl_basis * view_from_world).to_cols_array();
+
+        // Draw glTFs:
+        gl::call!(gl::UseProgram(self.gltf_shader.program));
         gl::call!(gl::UniformMatrix4fv(
-            self.proj_view_matrix_location,
+            self.gltf_shader.proj_view_matrix_location,
             1,
             gl::FALSE,
             proj_view_matrix.as_ptr()
         ));
-        gl::call!(gl::BindVertexArray(self.vao));
-        gl::call!(gl::DrawArrays(gl::TRIANGLES, 0, 3));
-    }
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        gl::call!(gl::DeleteVertexArrays(1, &self.vao));
-        gl::call!(gl::DeleteBuffers(1, &self.vbo));
-        gl::call!(gl::DeleteProgram(self.program));
+        self.draw_calls.draw(gltf::ATTR_LOC_MODEL_TRANSFORM_COLUMNS);
     }
 }

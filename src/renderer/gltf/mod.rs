@@ -1,10 +1,12 @@
-use crate::renderer::draw_calls::DrawCalls;
+use crate::renderer::draw_calls::{DrawCall, DrawCalls};
 use crate::renderer::gl;
 use glam::Mat4;
 
 mod loader;
+mod program;
 
 pub use loader::load_gltf;
+pub use program::*;
 
 // Rendering plan for gltfs:
 // rendering state for each frame HashMap<Material, HashMap<Primitive, Vec<Transform>>>
@@ -20,14 +22,9 @@ pub struct Gltf {
     nodes: Vec<Node>,
     meshes: Vec<Mesh>,
     materials: Vec<Material>,
-    // Pretty sure accessors and buffer views can just be used during
-    // initialization to make VAOs which can be stored in the primitives.
     primitives: Vec<Primitive>,
-    // Buffers actually only also need tracking usage-wise during
-    // initialization, as "which buffer should we bind" is stored in the VAOs,
-    // in the primitives. However, some data needs to be saved so we can delete
-    // the buffers in Drop. Don't know yet what's the wise move, maybe just a
-    // u32 for each buffer object (named like, gl_buffer_objects).
+
+    gl_vaos: Vec<gl::types::GLuint>,
     gl_buffers: Vec<gl::types::GLuint>,
 }
 
@@ -47,29 +44,43 @@ pub struct Mesh {
 
 pub struct Primitive {
     pub material_index: usize,
+    pub draw_call: DrawCall,
 }
 
 pub struct Material {}
 
 impl Gltf {
-    pub fn collect_draw_calls(&self, draw_calls: &mut DrawCalls) {
+    pub fn draw(&self, draw_calls: &mut DrawCalls, model_transform: Mat4) {
         let scene = &self.scenes[self.scene];
         let mut node_queue = scene
             .node_indices
             .iter()
-            .map(|&i| (Mat4::IDENTITY, &self.nodes[i]))
+            .map(|&i| (model_transform, &self.nodes[i]))
             .collect::<Vec<_>>();
         while let Some((parent_transform, node)) = node_queue.pop() {
             let transform = parent_transform * node.transform;
             if let Some(mesh_index) = node.mesh_index {
                 for &primitive_index in &self.meshes[mesh_index].primitive_indices {
                     let primitive = &self.primitives[primitive_index];
-                    draw_calls.add(transform);
+                    draw_calls.add(primitive.draw_call, transform);
                 }
             }
             for &child_index in &node.child_node_indices {
                 node_queue.push((transform, &self.nodes[child_index]));
             }
         }
+    }
+}
+
+impl Drop for Gltf {
+    fn drop(&mut self) {
+        gl::call!(gl::DeleteVertexArrays(
+            self.gl_vaos.len() as i32,
+            self.gl_vaos.as_ptr(),
+        ));
+        gl::call!(gl::DeleteBuffers(
+            self.gl_buffers.len() as i32,
+            self.gl_buffers.as_ptr(),
+        ));
     }
 }
