@@ -34,17 +34,7 @@ macro_rules! call {
 }
 pub(crate) use call;
 
-use std::ffi::{c_void, CString};
-
-pub fn buffer_data_f32(target: types::GLenum, data: &[f32], usage: types::GLenum) {
-    let data: &[u8] = bytemuck::cast_slice(&data);
-    call!(BufferData(
-        target,
-        data.len() as isize,
-        data.as_ptr() as *const c_void,
-        usage,
-    ));
-}
+use std::ffi::CString;
 
 #[track_caller]
 pub fn create_shader(type_: types::GLenum, shader_source: &str) -> u32 {

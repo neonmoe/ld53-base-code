@@ -1,6 +1,5 @@
 use glam::{Mat4, Quat, Vec3};
 use std::f32::consts::TAU;
-use std::ffi::c_void;
 
 mod bumpalloc_buffer;
 mod draw_calls;
@@ -8,31 +7,6 @@ pub mod gl;
 pub mod gltf;
 
 pub use draw_calls::DrawCalls;
-
-const TEST_TRIANGLE_VERTEX_SHADER: &str = r#"#version 300 es
-layout(location = 0) in vec3 ATTR_POSITION;
-out vec3 vertex_color;
-uniform mat4 projViewMatrix;
-void main() {
-    if (ATTR_POSITION.x > 0.0) {
-        vertex_color = vec3(1.0, 0.0, 0.0);
-    } else if (ATTR_POSITION.y > 0.0) {
-        vertex_color = vec3(0.0, 1.0, 0.0);
-    } else {
-        vertex_color = vec3(0.0, 0.0, 1.0);
-    }
-    gl_Position = projViewMatrix * vec4(ATTR_POSITION, 1.0);
-}
-"#;
-const TEST_TRIANGLE_FRAGMENT_SHADER: &str = r#"#version 300 es
-precision mediump float;
-out vec4 COLOR;
-in vec3 vertex_color;
-void main() {
-    // The framebuffer is not SRGB - Firefox at least does not support this.
-    COLOR = vec4(pow(vertex_color, vec3(1.0 / 2.2)), 1.0);
-}
-"#;
 
 pub struct Renderer {
     test_model: gltf::Gltf,

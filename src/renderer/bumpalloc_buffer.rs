@@ -5,66 +5,82 @@ use crate::renderer::gl;
 
 pub struct BumpAllocatedBuffer {
     buffer: gl::types::GLuint,
+    target: gl::types::GLenum,
+    usage: gl::types::GLenum,
     offset: usize,
     size: usize,
-    data: Vec<u8>,
+    data_copy: Vec<u8>,
+    buffer_leaked: bool,
 }
 
 impl BumpAllocatedBuffer {
-    pub fn new() -> BumpAllocatedBuffer {
+    pub fn new(target: gl::types::GLenum, usage: gl::types::GLenum) -> BumpAllocatedBuffer {
         let mut buffer = 0;
         gl::call!(gl::GenBuffers(1, &mut buffer));
         BumpAllocatedBuffer {
             buffer,
+            target,
+            usage,
             offset: 0,
             size: 0,
-            data: Vec::new(),
+            data_copy: Vec::new(),
+            buffer_leaked: false,
         }
     }
 
-    /// Writes the given bytes to a temporary buffer, and returns the buffer and
-    /// offset where the data has been written to.
-    pub fn allocate_buffer(&mut self, bytes: &[u8]) -> (gl::types::GLuint, *const c_void) {
+    /// Returns the internal buffer of the bump allocator. If `leak` is true,
+    /// the buffer is marked as "leaked" and not deleted when [Self] is dropped.
+    pub fn get_buffer(&mut self, leak: bool) -> gl::types::GLuint {
+        self.buffer_leaked |= leak;
+        self.buffer
+    }
+
+    /// Writes the bytes into the backing buffer of this bump allocator, and
+    /// returns the buffer object and offset into it, where the bytes were
+    /// written.
+    pub fn allocate_buffer(&mut self, bytes: &[u8]) -> (gl::types::GLuint, usize) {
         if self.offset + bytes.len() >= self.size {
             let additional = bytes.len() + self.size;
+            let original_size = self.size;
             self.size += additional;
-            self.data.reserve_exact(additional);
-            gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, self.buffer));
-            // Allocate the new space
+            self.data_copy.reserve_exact(additional);
+            gl::call!(gl::BindBuffer(self.target, self.buffer));
             gl::call!(gl::BufferData(
-                gl::ARRAY_BUFFER,
+                self.target,
                 self.size as isize,
                 ptr::null(),
-                gl::DYNAMIC_DRAW
+                self.usage,
             ));
-            // Upload back the existing bytes
             gl::call!(gl::BufferSubData(
-                gl::ARRAY_BUFFER,
+                self.target,
                 0,
-                self.data.len() as isize,
-                self.data.as_ptr() as *const c_void,
+                original_size as isize,
+                self.data_copy.as_ptr() as *const c_void,
             ));
         }
-        let upload_ptr = unsafe { ptr::null::<c_void>().add(self.offset) };
+        let upload_offset = self.offset;
+        gl::call!(gl::BindBuffer(self.target, self.buffer));
         gl::call!(gl::BufferSubData(
-            gl::ARRAY_BUFFER,
-            self.offset as isize,
+            self.target,
+            upload_offset as isize,
             bytes.len() as isize,
             bytes.as_ptr() as *const c_void,
         ));
-        self.data.extend_from_slice(bytes);
+        self.data_copy.extend_from_slice(bytes);
         self.offset += bytes.len();
-        (self.buffer, upload_ptr)
+        (self.buffer, upload_offset)
     }
 
     pub fn clear(&mut self) {
         self.offset = 0;
-        self.data.clear();
+        self.data_copy.clear();
     }
 }
 
 impl Drop for BumpAllocatedBuffer {
     fn drop(&mut self) {
-        gl::call!(gl::DeleteBuffers(1, &self.buffer));
+        if !self.buffer_leaked {
+            gl::call!(gl::DeleteBuffers(1, &self.buffer));
+        }
     }
 }

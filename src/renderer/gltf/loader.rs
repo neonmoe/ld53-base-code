@@ -1,3 +1,4 @@
+use crate::renderer::bumpalloc_buffer::BumpAllocatedBuffer;
 use crate::renderer::draw_calls::DrawCall;
 use crate::renderer::{gl, gltf};
 use glam::{Mat4, Quat, Vec3};
@@ -9,8 +10,10 @@ use tinyjson::JsonValue;
 pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     let gltf: JsonValue = gltf.parse().unwrap();
 
+    // TODO: Measure how much of the buffers is unused after load (i.e. used by textures and index buffers)
     let buffers_json = gltf["buffers"].get::<Vec<_>>().unwrap();
     let mut gl_buffers = vec![0; buffers_json.len()];
+    let mut buffer_slices = Vec::with_capacity(buffers_json.len());
     gl::call!(gl::GenBuffers(
         gl_buffers.len() as i32,
         gl_buffers.as_mut_ptr()
@@ -41,6 +44,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             buffer_data.as_ptr() as *const c_void,
             gl::STATIC_READ,
         ));
+        buffer_slices.push(*buffer_data);
     }
     gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, 0));
 
@@ -100,6 +104,9 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         gl_vaos.len() as i32,
         gl_vaos.as_mut_ptr()
     ));
+    let mut index_buffer_allocator =
+        BumpAllocatedBuffer::new(gl::ELEMENT_ARRAY_BUFFER, gl::STATIC_DRAW);
+    gl_buffers.push(index_buffer_allocator.get_buffer(true));
     let mut primitives = Vec::with_capacity(primitive_count);
     let mut meshes = Vec::with_capacity(meshes_json.len());
     for mesh in meshes_json {
@@ -113,7 +120,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                     .get::<HashMap<_, _>>()
                     .unwrap();
 
-                let buffer = gl_buffers[take_usize(&buffer_view["buffer"])];
+                let buffer = take_usize(&buffer_view["buffer"]);
                 let byte_offset = accessor.get("byteOffset").map(take_usize).unwrap_or(0)
                     + buffer_view.get("byteOffset").map(take_usize).unwrap_or(0);
                 let count = take_usize(&accessor["count"]) as gl::types::GLint;
@@ -141,9 +148,6 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             let mode = primitive_json.get("mode").map(take_usize).unwrap_or(4) as gl::types::GLuint;
             let vao = gl_vaos[primitive_index];
             let attribute_accessors = primitive_json["attributes"].get::<HashMap<_, _>>().unwrap();
-            let indices_accessor = take_usize(&primitive_json["indices"]);
-            let (index_buffer, index_byte_offset, index_count, _, index_type, _) =
-                unpack_accessor(indices_accessor);
             gl::call!(gl::BindVertexArray(vao));
             for (attr_name, accessor) in attribute_accessors {
                 let accessor = take_usize(accessor);
@@ -158,7 +162,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                 };
                 let (buffer, offset, _, size, type_, normalized) = unpack_accessor(accessor);
                 gl::call!(gl::EnableVertexAttribArray(location));
-                gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, buffer));
+                gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, gl_buffers[buffer]));
                 gl::call!(gl::VertexAttribPointer(
                     location,
                     size,
@@ -168,6 +172,21 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                     ptr::null::<c_void>().add(offset),
                 ));
             }
+
+            let indices_accessor = take_usize(&primitive_json["indices"]);
+            let (index_buffer, index_byte_offset, index_count, size, index_type, _) =
+                unpack_accessor(indices_accessor);
+            let index_type_byte_size = match index_type {
+                gl::UNSIGNED_BYTE => 1,
+                gl::UNSIGNED_SHORT => 2,
+                gl::UNSIGNED_INT => 4,
+                type_ => panic!("invalid index buffer type {type_}"),
+            };
+            let index_byte_end =
+                index_byte_offset + (index_count * size * index_type_byte_size) as usize;
+            let index_buffer = &buffer_slices[index_buffer][index_byte_offset..index_byte_end];
+            let (index_buffer, index_byte_offset) =
+                index_buffer_allocator.allocate_buffer(index_buffer);
 
             primitives.push(gltf::Primitive {
                 material_index,

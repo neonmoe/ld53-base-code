@@ -36,7 +36,7 @@ impl DrawCalls {
     pub fn new() -> DrawCalls {
         DrawCalls {
             draws: HashMap::new(),
-            temp_buffer: BumpAllocatedBuffer::new(),
+            temp_buffer: BumpAllocatedBuffer::new(gl::ARRAY_BUFFER, gl::STREAM_DRAW),
         }
     }
 
@@ -62,11 +62,12 @@ impl DrawCalls {
             for (draw_call, instance_data) in draw_calls {
                 gl::call!(gl::BindVertexArray(draw_call.vao));
                 let transforms = bytemuck::cast_slice(&instance_data.transforms);
-                let (transforms_buffer, transforms_ptr) =
+                let (transforms_buffer, transforms_offset) =
                     self.temp_buffer.allocate_buffer(transforms);
                 gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, transforms_buffer));
                 for i in 0..4 {
                     let attrib_location = model_transform_attrib_locations[i];
+                    let offset = transforms_offset + mem::size_of::<Vec4>() * i;
                     gl::call!(gl::EnableVertexAttribArray(attrib_location));
                     gl::call!(gl::VertexAttribPointer(
                         attrib_location,
@@ -74,7 +75,7 @@ impl DrawCalls {
                         gl::FLOAT,
                         gl::FALSE,
                         mem::size_of::<Mat4>() as i32,
-                        transforms_ptr.add(mem::size_of::<Vec4>() * i)
+                        ptr::null::<c_void>().add(offset)
                     ));
                     gl::call!(gl::VertexAttribDivisor(attrib_location, 1));
                 }
