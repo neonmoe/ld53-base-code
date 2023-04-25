@@ -1,4 +1,4 @@
-use std::ffi::{c_char, c_int, CString};
+use std::ffi::{c_char, c_int, c_uint, CString};
 
 pub fn set_main_loop(func: EmCallbackFunc) -> ! {
     unsafe { emscripten_set_main_loop(func, 0, 1) };
@@ -27,4 +27,7 @@ extern "C" {
 
     /// https://emscripten.org/docs/api_reference/emscripten.h.html#c.emscripten_run_script
     pub fn emscripten_run_script(script: *const c_char);
+
+    /// https://emscripten.org/docs/api_reference/emscripten.h.html#c.emscripten_sleep
+    pub fn emscripten_sleep(ms: c_uint);
 }

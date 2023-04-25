@@ -26,6 +26,7 @@ pub struct Gltf {
 
     gl_vaos: Vec<gl::types::GLuint>,
     gl_buffers: Vec<gl::types::GLuint>,
+    gl_textures: Vec<gl::types::GLuint>,
 }
 
 pub struct Scene {
@@ -86,6 +87,10 @@ impl Drop for Gltf {
         gl::call!(gl::DeleteBuffers(
             self.gl_buffers.len() as i32,
             self.gl_buffers.as_ptr(),
+        ));
+        gl::call!(gl::DeleteTextures(
+            self.gl_textures.len() as i32,
+            self.gl_textures.as_ptr(),
         ));
     }
 }

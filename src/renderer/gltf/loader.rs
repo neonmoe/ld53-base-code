@@ -2,6 +2,8 @@ use crate::renderer::bumpalloc_buffer::BumpAllocatedBuffer;
 use crate::renderer::draw_calls::DrawCall;
 use crate::renderer::{gl, gltf};
 use glam::{Mat4, Quat, Vec3};
+use image::imageops::FilterType;
+use image::DynamicImage;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
@@ -47,6 +49,9 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         buffer_slices.push(*buffer_data);
     }
     gl::call!(gl::BindBuffer(gl::ARRAY_BUFFER, 0));
+    let get_buffer_slice = |buffer: usize, offset: usize, length: usize| {
+        &buffer_slices[buffer][offset..offset + length]
+    };
 
     let scenes_json = gltf["scenes"].get::<Vec<_>>().unwrap();
     let mut scenes = Vec::with_capacity(scenes_json.len());
@@ -124,9 +129,10 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                 let byte_offset = accessor.get("byteOffset").map(take_usize).unwrap_or(0)
                     + buffer_view.get("byteOffset").map(take_usize).unwrap_or(0);
                 let count = take_usize(&accessor["count"]) as gl::types::GLint;
-                if accessor.contains_key("byteStride") {
-                    panic!("this gltf loader does not support byteStride");
-                }
+                assert!(
+                    !buffer_view.contains_key("byteStride"),
+                    "byteStride is not supported for attributes"
+                );
                 let size = match accessor["type"].get::<String>().unwrap().as_ref() {
                     "SCALAR" => 1,
                     "VEC2" => 2,
@@ -186,9 +192,8 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                 gl::UNSIGNED_INT => 4,
                 type_ => panic!("invalid index buffer type {type_}"),
             };
-            let index_byte_end =
-                index_byte_offset + (index_count * size * index_type_byte_size) as usize;
-            let index_buffer = &buffer_slices[index_buffer][index_byte_offset..index_byte_end];
+            let index_byte_length = (index_count * size * index_type_byte_size) as usize;
+            let index_buffer = get_buffer_slice(index_buffer, index_byte_offset, index_byte_length);
             let (index_buffer, index_byte_offset) =
                 index_buffer_allocator.allocate_buffer(index_buffer);
 
@@ -210,8 +215,129 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         meshes.push(gltf::Mesh { primitive_indices });
     }
 
-    // TODO: Make a texture from each image
-    // - included fields: images, bufferviews
+    let materials_json = gltf["materials"].get::<Vec<_>>().unwrap();
+    let textures_json = gltf["textures"].get::<Vec<_>>().unwrap();
+    let images_json = gltf["images"].get::<Vec<_>>().unwrap();
+    let mut is_srgb = vec![None; images_json.len()];
+    for material in materials_json {
+        let material = material.get::<HashMap<_, _>>().unwrap();
+        let pbr_image = |name: &str| {
+            let pbr = material
+                .get("pbrMetallicRoughness")?
+                .get::<HashMap<_, _>>()
+                .unwrap();
+            let texture = take_usize(&pbr.get(name)?["index"]);
+            Some(take_usize(&textures_json[texture]["source"]))
+        };
+        let additional_image = |name: &str| {
+            let texture = take_usize(&material.get(name)?["index"]);
+            Some(take_usize(&textures_json[texture]["source"]))
+        };
+        let set_srgb_status = |is_srgb: &mut [Option<bool>], index: usize, expected: bool| {
+            assert!(
+                is_srgb[index] != Some(!expected),
+                "images[{}] is used both as srgb and not",
+                index,
+            );
+            is_srgb[index] = Some(expected);
+        };
+        if let Some(image) = pbr_image("baseColorTexture") {
+            set_srgb_status(&mut is_srgb, image, true);
+        }
+        if let Some(image) = pbr_image("metallicRoughnessTexture") {
+            set_srgb_status(&mut is_srgb, image, false);
+        }
+        if let Some(image) = additional_image("normalTexture") {
+            set_srgb_status(&mut is_srgb, image, false);
+        }
+        if let Some(image) = additional_image("occlusionTexture") {
+            set_srgb_status(&mut is_srgb, image, false);
+        }
+        if let Some(image) = additional_image("emissiveTexture") {
+            set_srgb_status(&mut is_srgb, image, true);
+        }
+    }
+
+    let mut gl_textures = vec![0; images_json.len()];
+    gl::call!(gl::GenTextures(
+        gl_textures.len() as i32,
+        gl_textures.as_mut_ptr()
+    ));
+    for (i, image) in images_json.into_iter().enumerate() {
+        let Some(is_srgb) = is_srgb[i] else {
+            continue; // Not used by any material.
+        };
+
+        let image = image.get::<HashMap<_, _>>().unwrap();
+        let image_data = if let Some(uri) = image.get("uri") {
+            let uri = uri.get::<String>().unwrap().as_str();
+            match resources
+                .iter()
+                .find(|(name, _)| *name == uri)
+                .map(|(_, data)| *data)
+            {
+                Some(data) => data,
+                None => panic!("the uri of image {i} ({uri}) is not included in resources"),
+            }
+        } else {
+            let buffer_view = image["bufferView"].get::<HashMap<_, _>>().unwrap();
+            let buffer = take_usize(&buffer_view["buffer"]);
+            let offset = buffer_view.get("byteOffset").map(take_usize).unwrap_or(0);
+            let length = take_usize(&buffer_view["byteLength"]);
+            assert!(
+                !buffer_view.contains_key("byteStride"),
+                "byteStride is not supported for image data"
+            );
+            get_buffer_slice(buffer, offset, length)
+        };
+
+        let mut parsed_image = image::load_from_memory(image_data).unwrap();
+        let (format, type_) = match parsed_image {
+            DynamicImage::ImageRgb8(_) => (gl::RGB, gl::UNSIGNED_BYTE),
+            DynamicImage::ImageRgba8(_) => (gl::RGBA, gl::UNSIGNED_BYTE),
+            DynamicImage::ImageRgb16(_) => (gl::RGB, gl::UNSIGNED_SHORT),
+            DynamicImage::ImageRgba16(_) => (gl::RGBA, gl::UNSIGNED_SHORT),
+            img => panic!("image {img:?} is of an unsupported format"),
+        };
+        let internal_format = match (is_srgb, format) {
+            (true, gl::RGBA) => gl::SRGB8_ALPHA8,
+            (true, gl::RGB) => gl::SRGB8,
+            (false, format) => format,
+            _ => unreachable!(),
+        };
+        gl::call!(gl::BindTexture(gl::TEXTURE_2D, gl_textures[i]));
+        let size = parsed_image.width().min(parsed_image.height());
+        let mip_levels = (size as f32).log2().floor() as i32 + 1;
+        for mip_level in 0..mip_levels {
+            let (width, height, data) = (
+                parsed_image.width() as i32,
+                parsed_image.height() as i32,
+                parsed_image.as_bytes(),
+            );
+            gl::call!(gl::TexImage2D(
+                gl::TEXTURE_2D,
+                mip_level,
+                internal_format as i32,
+                width,
+                height,
+                0,
+                format,
+                type_,
+                data.as_ptr() as *const c_void,
+            ));
+            if mip_level < mip_levels - 1 {
+                parsed_image = parsed_image.resize_exact(
+                    width as u32 / 2,
+                    height as u32 / 2,
+                    if is_srgb {
+                        FilterType::CatmullRom
+                    } else {
+                        FilterType::Triangle
+                    },
+                );
+            }
+        }
+    }
 
     // TODO: Make the required uniforms from each material
     // - included fields: materials, textures
@@ -227,6 +353,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         primitives,
         gl_vaos,
         gl_buffers,
+        gl_textures,
     }
 }
 

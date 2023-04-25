@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
         let (w, h) = window.drawable_size();
         gl::call!(gl::Viewport(0, 0, w as i32, h as i32));
 
-        gl::call!(gl::ClearColor(0.2, 0.6, 0.2, 1.0));
+        gl::call!(gl::ClearColor(0.2, 0.4, 0.2, 1.0));
         gl::call!(gl::Clear(gl::COLOR_BUFFER_BIT));
         window.gl_swap_window();
     }
@@ -74,6 +74,14 @@ fn main() -> anyhow::Result<()> {
         }
     }
     unsafe { sdl2::sys::SDL_SetEventFilter(Some(event_filter), ptr::null_mut()) };
+
+    #[cfg(target_family = "wasm")]
+    {
+        emscripten_h::run_javascript("document.getElementById('browser-support-warning').innerHTML = \"<p>Loading... This browser seems to support WebGL 2 and WASM, but if this takes a long time, try the desktop version instead.</p>\"");
+        // Let the JS runtime get everything else (including updating the
+        // loading screen and the above notice) out of the way before continuing:
+        unsafe { emscripten_h::emscripten_sleep(100) };
+    }
 
     unsafe { STATE = Some(State::new(window, event_pump)) };
 
