@@ -103,3 +103,13 @@ pub fn get_uniform_location(program: u32, name: &str) -> Option<i32> {
         Some(location)
     }
 }
+
+pub fn get_uniform_block_index(program: u32, name: &str) -> Option<u32> {
+    let name = CString::from_vec_with_nul(format!("{name}\0").into_bytes()).unwrap();
+    let location = call!(GetUniformBlockIndex(program, name.as_ptr()));
+    if location == INVALID_INDEX {
+        None
+    } else {
+        Some(location)
+    }
+}

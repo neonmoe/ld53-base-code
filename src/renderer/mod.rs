@@ -32,6 +32,7 @@ impl Renderer {
                 )
             };
         }
+        let gltf_shader = gltf::create_program();
         let test_model = gltf::load_gltf(
             include_str!(boom_box_path!(".gltf")),
             &[
@@ -43,7 +44,6 @@ impl Renderer {
                 boom_box_resource!("_roughnessMetallic.png"),
             ],
         );
-        let gltf_shader = gltf::create_program();
         let draw_calls = DrawCalls::new();
         Renderer {
             test_model,

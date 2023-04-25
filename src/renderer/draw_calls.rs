@@ -8,8 +8,11 @@ use std::{mem, ptr};
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct Uniforms {
     /// The OpenGL textures to bind at GL_TEXTURE0 + i where each element is
-    /// of this Vec is `(i, texture_object, sampler_object)`.
+    /// of this array is `(i, texture_object, sampler_object)`.
     pub textures: [Option<(u32, u32, u32)>; 5],
+    /// The OpenGL uniform buffers `buffer` to bind at indices `i`, where each
+    /// element of this array is `(i, buffer, offset, size)`.
+    pub ubos: [Option<(u32, u32, usize, usize)>; 1],
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -74,13 +77,22 @@ impl DrawCalls {
                 continue;
             }
 
-            // TODO: Update uniforms
             for (binding, texture, sampler) in uniforms.textures.iter().flatten() {
                 gl::call!(gl::ActiveTexture(
                     gl::TEXTURE0 + *binding as gl::types::GLenum
                 ));
                 gl::call!(gl::BindTexture(gl::TEXTURE_2D, *texture));
                 gl::call!(gl::BindSampler(*binding as u32, *sampler));
+            }
+
+            for &(index, buffer, offset, size) in uniforms.ubos.iter().flatten() {
+                gl::call!(gl::BindBufferRange(
+                    gl::UNIFORM_BUFFER,
+                    index,
+                    buffer,
+                    offset as isize,
+                    size as isize,
+                ));
             }
 
             for (draw_call, instance_data) in draw_calls {

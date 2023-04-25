@@ -1,7 +1,7 @@
 use crate::renderer::bumpalloc_buffer::BumpAllocatedBuffer;
 use crate::renderer::draw_calls::{DrawCall, Uniforms};
 use crate::renderer::{gl, gltf};
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use image::imageops::FilterType;
 use image::DynamicImage;
 use std::collections::HashMap;
@@ -259,7 +259,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         }
     }
 
-    let mut gl_textures = vec![0; images_json.len() + 4];
+    let mut gl_textures = vec![0; images_json.len() + 3];
     gl::call!(gl::GenTextures(
         gl_textures.len() as i32,
         gl_textures.as_mut_ptr()
@@ -267,7 +267,6 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     let white_tex = gl_textures[gl_textures.len() - 1];
     let blue_tex = gl_textures[gl_textures.len() - 2];
     let black_tex = gl_textures[gl_textures.len() - 3];
-    let gray_tex = gl_textures[gl_textures.len() - 4];
     let make_pixel_tex = |tex: u32, color: [u8; 3]| {
         let target = gl::TEXTURE_2D;
         let ifmt = gl::RGBA as i32;
@@ -280,7 +279,6 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     make_pixel_tex(white_tex, [0xFF, 0xFF, 0xFF]);
     make_pixel_tex(blue_tex, [0, 0, 0xFF]);
     make_pixel_tex(black_tex, [0, 0, 0]);
-    make_pixel_tex(gray_tex, [0x7F, 0x7F, 0x7F]);
     for (i, image) in images_json.into_iter().enumerate() {
         let Some(is_srgb) = is_srgb[i] else {
             continue; // Not used by any material.
@@ -426,6 +424,9 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
 
     let materials_json = gltf["materials"].get::<Vec<_>>().unwrap();
     let mut materials = Vec::with_capacity(materials_json.len());
+    let mut uniform_buffer_allocator =
+        BumpAllocatedBuffer::new(gl::UNIFORM_BUFFER, gl::STATIC_DRAW);
+    gl_buffers.push(uniform_buffer_allocator.get_buffer(true));
     for material in materials_json {
         let unpack_texture_info = |texture_info: &JsonValue| {
             let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
@@ -445,6 +446,15 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         };
 
         let material = material.get::<HashMap<_, _>>().unwrap();
+        let mut material_buffer = gltf::UniformBlockMaterial {
+            base_color_factor: Vec4::splat(1.0),
+            metallic_factor: 1.0,
+            roughness_factor: 1.0,
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            emissive_factor: Vec4::splat(0.0),
+        };
+
         let mut textures = [None; 5];
         if let Some(pbr) = material.get("pbrMetallicRoughness") {
             let pbr = pbr.get::<HashMap<_, _>>().unwrap();
@@ -458,20 +468,44 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                 let (texture, sampler) = unpack_texture_info(texture_info);
                 textures[1] = Some((gltf::TEX_UNIT_METALLIC_ROUGHNESS, texture, sampler));
             } else {
-                textures[1] = Some((gltf::TEX_UNIT_METALLIC_ROUGHNESS, gray_tex, default_sampler));
+                textures[1] = Some((
+                    gltf::TEX_UNIT_METALLIC_ROUGHNESS,
+                    white_tex,
+                    default_sampler,
+                ));
+            }
+            if let Some(factor) = pbr.get("baseColorFactor") {
+                let factor = factor.get::<Vec<_>>().unwrap();
+                let x = *factor[0].get::<f64>().unwrap() as f32;
+                let y = *factor[1].get::<f64>().unwrap() as f32;
+                let z = *factor[2].get::<f64>().unwrap() as f32;
+                let w = *factor[3].get::<f64>().unwrap() as f32;
+                material_buffer.base_color_factor = Vec4::new(x, y, z, w);
+            }
+            if let Some(factor) = pbr.get("metallicFactor") {
+                material_buffer.metallic_factor = *factor.get::<f64>().unwrap() as f32;
+            }
+            if let Some(factor) = pbr.get("roughnessFactor") {
+                material_buffer.roughness_factor = *factor.get::<f64>().unwrap() as f32;
             }
         }
         if let Some(texture_info) = material.get("normalTexture") {
-            // TODO: normal_texture_info.scale (should be included in ubo)
             let (texture, sampler) = unpack_texture_info(texture_info);
             textures[2] = Some((gltf::TEX_UNIT_NORMAL, texture, sampler));
+            let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
+            if let Some(factor) = texture_info.get("scale") {
+                material_buffer.normal_scale = *factor.get::<f64>().unwrap() as f32;
+            }
         } else {
             textures[2] = Some((gltf::TEX_UNIT_NORMAL, blue_tex, default_sampler));
         }
         if let Some(texture_info) = material.get("occlusionTexture") {
-            // TODO: occlusion_texture_info.strength (should be included in ubo)
             let (texture, sampler) = unpack_texture_info(texture_info);
             textures[3] = Some((gltf::TEX_UNIT_OCCLUSION, texture, sampler));
+            let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
+            if let Some(factor) = texture_info.get("strength") {
+                material_buffer.occlusion_strength = *factor.get::<f64>().unwrap() as f32;
+            }
         } else {
             textures[3] = Some((gltf::TEX_UNIT_OCCLUSION, white_tex, default_sampler));
         }
@@ -481,8 +515,22 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         } else {
             textures[4] = Some((gltf::TEX_UNIT_EMISSIVE, black_tex, default_sampler));
         }
+        if let Some(factor) = material.get("emissiveFactor") {
+            let factor = factor.get::<Vec<_>>().unwrap();
+            let x = *factor[0].get::<f64>().unwrap() as f32;
+            let y = *factor[1].get::<f64>().unwrap() as f32;
+            let z = *factor[2].get::<f64>().unwrap() as f32;
+            material_buffer.emissive_factor = Vec4::new(x, y, z, 1.0);
+        }
+
+        let material_data = [material_buffer];
+        let material_data = bytemuck::cast_slice(&material_data);
+        let (ubo, ubo_offset) = uniform_buffer_allocator.allocate_buffer(material_data);
+        let ubo_size = material_data.len();
+        let ubos = [Some((gltf::UNIFORM_BLOCK_MATERIAL, ubo, ubo_offset, ubo_size)); 1];
+
         materials.push(gltf::Material {
-            uniforms: Uniforms { textures },
+            uniforms: Uniforms { textures, ubos },
         });
     }
 

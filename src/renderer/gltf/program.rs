@@ -1,18 +1,13 @@
+use glam::Vec4;
+
 use crate::renderer::gl;
 
-/// The vertex attribute location of the POSITION attribute of glTF models.
 pub const ATTR_LOC_POSITION: gl::types::GLuint = 0;
-/// The vertex attribute location of the NORMAL attribute of glTF models.
 pub const ATTR_LOC_NORMAL: gl::types::GLuint = 1;
-/// The vertex attribute location of the TANGENT attribute of glTF models.
 pub const ATTR_LOC_TANGENT: gl::types::GLuint = 2;
-/// The vertex attribute location of the TEXCOORD0 attribute of glTF models.
 pub const ATTR_LOC_TEXCOORD_0: gl::types::GLuint = 3;
-/// The vertex attribute location of the TEXCOORD1 attribute of glTF models.
 pub const ATTR_LOC_TEXCOORD_1: gl::types::GLuint = 4;
-/// The vertex attribute location of the COLOR0 attribute of glTF models.
 pub const ATTR_LOC_COLOR_0: gl::types::GLuint = 5;
-/// The vertex attribute locations of the individual columns of the MODEL_TRANSFORM mat4 attribute of glTF models.
 pub const ATTR_LOC_MODEL_TRANSFORM_COLUMNS: [gl::types::GLuint; 4] = [6, 7, 8, 9];
 
 pub const TEX_UNIT_BASE_COLOR: u32 = 0;
@@ -20,6 +15,21 @@ pub const TEX_UNIT_METALLIC_ROUGHNESS: u32 = 1;
 pub const TEX_UNIT_NORMAL: u32 = 2;
 pub const TEX_UNIT_OCCLUSION: u32 = 3;
 pub const TEX_UNIT_EMISSIVE: u32 = 4;
+
+pub const UNIFORM_BLOCK_MATERIAL: u32 = 0;
+
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct UniformBlockMaterial {
+    pub base_color_factor: Vec4,
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub normal_scale: f32,
+    pub occlusion_strength: f32,
+    pub emissive_factor: Vec4,
+}
+unsafe impl bytemuck::Zeroable for UniformBlockMaterial {}
+unsafe impl bytemuck::Pod for UniformBlockMaterial {}
 
 pub struct ShaderProgram {
     pub program: gl::types::GLuint,
@@ -40,6 +50,7 @@ pub fn create_program() -> ShaderProgram {
     let normal_tex_location = gl::get_uniform_location(program, "normal_tex").unwrap();
     let occlusion_tex_location = gl::get_uniform_location(program, "occlusion_tex").unwrap();
     let emissive_tex_location = gl::get_uniform_location(program, "emissive_tex").unwrap();
+    let material_ub_location = gl::get_uniform_block_index(program, "Material").unwrap();
     gl::call!(gl::UseProgram(program));
     gl::call!(gl::Uniform1i(
         base_color_tex_location,
@@ -57,6 +68,11 @@ pub fn create_program() -> ShaderProgram {
     gl::call!(gl::Uniform1i(
         emissive_tex_location,
         TEX_UNIT_EMISSIVE as i32
+    ));
+    gl::call!(gl::UniformBlockBinding(
+        program,
+        material_ub_location,
+        UNIFORM_BLOCK_MATERIAL,
     ));
     gl::call!(gl::DeleteShader(vertex_shader));
     gl::call!(gl::DeleteShader(fragment_shader));
