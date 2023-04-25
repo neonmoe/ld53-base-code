@@ -24,9 +24,11 @@ layout(location = 4) in vec2 TEXCOORD_1;
 layout(location = 5) in vec3 COLOR_0;
 layout(location = 6) in mat4 MODEL_TRANSFORM;
 out vec3 vertex_color;
+out vec3 normal;
 uniform mat4 projViewMatrix;
 void main() {
-    vertex_color = NORMAL;
+    vertex_color = COLOR_0;
+    normal = NORMAL;
     gl_Position = projViewMatrix * MODEL_TRANSFORM * vec4(POSITION, 1.0);
 }
 "#;
@@ -34,8 +36,10 @@ const FRAGMENT_SHADER: &str = r#"#version 300 es
 precision mediump float;
 out vec4 FRAG_COLOR;
 in vec3 vertex_color;
+in vec3 normal;
 void main() {
-    vec3 output_linear_color = vec3(0.5) + vertex_color * 0.3;
+    float brightness = 0.1 + 0.9 * max(0.0, dot(normalize(vec3(1.0, 1.0, -1.0)), normal));
+    vec3 output_linear_color = vertex_color * vec3(brightness);
 
     // The framebuffer is not SRGB, so we transform the linear color to close-enough-to-srgb.
     FRAG_COLOR = vec4(pow(output_linear_color, vec3(1.0 / 2.2)), 1.0);

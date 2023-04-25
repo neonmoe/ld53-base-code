@@ -147,6 +147,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             let material_index = take_usize(&primitive_json["material"]);
             let mode = primitive_json.get("mode").map(take_usize).unwrap_or(4) as gl::types::GLuint;
             let vao = gl_vaos[primitive_index];
+            let mut disabled_all_ones_vertex_attribute = Some(gltf::ATTR_LOC_COLOR_0);
             let attribute_accessors = primitive_json["attributes"].get::<HashMap<_, _>>().unwrap();
             gl::call!(gl::BindVertexArray(vao));
             for (attr_name, accessor) in attribute_accessors {
@@ -171,6 +172,9 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                     0,
                     ptr::null::<c_void>().add(offset),
                 ));
+                if location == gltf::ATTR_LOC_COLOR_0 {
+                    disabled_all_ones_vertex_attribute = None;
+                }
             }
 
             let indices_accessor = take_usize(&primitive_json["indices"]);
@@ -197,6 +201,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                     index_buffer,
                     index_byte_offset,
                     index_count,
+                    disabled_all_ones_vertex_attribute,
                 },
             });
             primitive_indices.push(primitive_index);

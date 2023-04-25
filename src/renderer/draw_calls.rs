@@ -16,6 +16,11 @@ pub struct DrawCall {
     pub index_type: gl::types::GLuint,
     pub index_byte_offset: usize,
     pub index_count: gl::types::GLint,
+    /// If vertex colors aren't provided, they should default to 1, 1, 1, 1
+    /// instead of the default 0, 0, 0, 1. The problem is, the default value
+    /// needs to be provided at draw-time, and can't be saved in the VAO. So
+    /// this holds the location of the vertex color attribute, if it's disabled.
+    pub disabled_all_ones_vertex_attribute: Option<gl::types::GLuint>,
 }
 
 #[derive(Default)]
@@ -78,6 +83,9 @@ impl DrawCalls {
                         ptr::null::<c_void>().add(offset)
                     ));
                     gl::call!(gl::VertexAttribDivisor(attrib_location, 1));
+                }
+                if let Some(location) = draw_call.disabled_all_ones_vertex_attribute {
+                    gl::call!(gl::VertexAttrib4f(location, 1.0, 1.0, 1.0, 1.0));
                 }
                 gl::call!(gl::BindBuffer(
                     gl::ELEMENT_ARRAY_BUFFER,

@@ -58,7 +58,7 @@ impl Renderer {
             &mut self.draw_calls,
             Mat4::from_scale_rotation_translation(
                 Vec3::splat(100.0), // Apparently the model is just tiny, in Blender too
-                Quat::IDENTITY,
+                Quat::from_rotation_x(-0.5) * Quat::from_rotation_y(TAU * 0.4),
                 Vec3::new(0.0, 0.0, 5.0),
             ),
         );
