@@ -5,10 +5,14 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::{mem, ptr};
 
-#[derive(PartialEq, Eq, Hash)]
-struct Uniforms {}
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Uniforms {
+    /// The OpenGL textures to bind at GL_TEXTURE0 + i where each element is
+    /// of this Vec is `(i, texture_object, sampler_object)`.
+    pub textures: [Option<(u32, u32, u32)>; 5],
+}
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct DrawCall {
     pub vao: gl::types::GLuint,
     pub mode: gl::types::GLenum,
@@ -46,9 +50,17 @@ impl DrawCalls {
         }
     }
 
-    pub fn add(&mut self, draw_call: DrawCall, transform: Mat4) {
-        let draw = self.draws.entry(Uniforms {}).or_default();
-        let mut draw_call = draw.entry(draw_call).or_default();
+    pub fn add(&mut self, uniforms: &Uniforms, draw_call: &DrawCall, transform: Mat4) {
+        let draw = if let Some(draw) = self.draws.get_mut(uniforms) {
+            draw
+        } else {
+            self.draws.entry(uniforms.clone()).or_default()
+        };
+        let mut draw_call = if let Some(draw_call) = draw.get_mut(draw_call) {
+            draw_call
+        } else {
+            draw.entry(draw_call.clone()).or_default()
+        };
         draw_call.count += 1;
         draw_call.transforms.push(transform);
     }
@@ -63,7 +75,13 @@ impl DrawCalls {
             }
 
             // TODO: Update uniforms
-            let _ = uniforms;
+            for (binding, texture, sampler) in uniforms.textures.iter().flatten() {
+                gl::call!(gl::ActiveTexture(
+                    gl::TEXTURE0 + *binding as gl::types::GLenum
+                ));
+                gl::call!(gl::BindTexture(gl::TEXTURE_2D, *texture));
+                gl::call!(gl::BindSampler(*binding as u32, *sampler));
+            }
 
             for (draw_call, instance_data) in draw_calls {
                 gl::call!(gl::BindVertexArray(draw_call.vao));

@@ -15,36 +15,11 @@ pub const ATTR_LOC_COLOR_0: gl::types::GLuint = 5;
 /// The vertex attribute locations of the individual columns of the MODEL_TRANSFORM mat4 attribute of glTF models.
 pub const ATTR_LOC_MODEL_TRANSFORM_COLUMNS: [gl::types::GLuint; 4] = [6, 7, 8, 9];
 
-const VERTEX_SHADER: &str = r#"#version 300 es
-layout(location = 0) in vec3 POSITION;
-layout(location = 1) in vec3 NORMAL;
-layout(location = 2) in vec4 TANGENT;
-layout(location = 3) in vec2 TEXCOORD_0;
-layout(location = 4) in vec2 TEXCOORD_1;
-layout(location = 5) in vec3 COLOR_0;
-layout(location = 6) in mat4 MODEL_TRANSFORM;
-out vec3 vertex_color;
-out vec3 normal;
-uniform mat4 projViewMatrix;
-void main() {
-    vertex_color = COLOR_0;
-    normal = NORMAL;
-    gl_Position = projViewMatrix * MODEL_TRANSFORM * vec4(POSITION, 1.0);
-}
-"#;
-const FRAGMENT_SHADER: &str = r#"#version 300 es
-precision mediump float;
-out vec4 FRAG_COLOR;
-in vec3 vertex_color;
-in vec3 normal;
-void main() {
-    float brightness = 0.1 + 0.9 * max(0.0, dot(normalize(vec3(1.0, 1.0, -1.0)), normal));
-    vec3 output_linear_color = vertex_color * vec3(brightness);
-
-    // The framebuffer is not SRGB, so we transform the linear color to close-enough-to-srgb.
-    FRAG_COLOR = vec4(pow(output_linear_color, vec3(1.0 / 2.2)), 1.0);
-}
-"#;
+pub const TEX_UNIT_BASE_COLOR: u32 = 0;
+pub const TEX_UNIT_METALLIC_ROUGHNESS: u32 = 1;
+pub const TEX_UNIT_NORMAL: u32 = 2;
+pub const TEX_UNIT_OCCLUSION: u32 = 3;
+pub const TEX_UNIT_EMISSIVE: u32 = 4;
 
 pub struct ShaderProgram {
     pub program: gl::types::GLuint,
@@ -54,11 +29,35 @@ pub struct ShaderProgram {
 /// Compiles and returns the shader program which should be used to render the
 /// glTF models.
 pub fn create_program() -> ShaderProgram {
-    let vertex_shader = gl::create_shader(gl::VERTEX_SHADER, VERTEX_SHADER);
-    let fragment_shader = gl::create_shader(gl::FRAGMENT_SHADER, FRAGMENT_SHADER);
+    let vertex_shader = gl::create_shader(gl::VERTEX_SHADER, include_str!("gltf_vertex.glsl"));
+    let fragment_shader =
+        gl::create_shader(gl::FRAGMENT_SHADER, include_str!("gltf_fragment.glsl"));
     let program = gl::create_program(&[vertex_shader, fragment_shader]);
+    let proj_view_matrix_location = gl::get_uniform_location(program, "proj_view_matrix").unwrap();
+    let base_color_tex_location = gl::get_uniform_location(program, "base_color_tex").unwrap();
+    let metallic_roughness_tex_location =
+        gl::get_uniform_location(program, "metallic_roughness_tex").unwrap();
+    let normal_tex_location = gl::get_uniform_location(program, "normal_tex").unwrap();
+    let occlusion_tex_location = gl::get_uniform_location(program, "occlusion_tex").unwrap();
+    let emissive_tex_location = gl::get_uniform_location(program, "emissive_tex").unwrap();
     gl::call!(gl::UseProgram(program));
-    let proj_view_matrix_location = gl::get_uniform_location(program, "projViewMatrix").unwrap();
+    gl::call!(gl::Uniform1i(
+        base_color_tex_location,
+        TEX_UNIT_BASE_COLOR as i32
+    ));
+    gl::call!(gl::Uniform1i(
+        metallic_roughness_tex_location,
+        TEX_UNIT_METALLIC_ROUGHNESS as i32,
+    ));
+    gl::call!(gl::Uniform1i(normal_tex_location, TEX_UNIT_NORMAL as i32));
+    gl::call!(gl::Uniform1i(
+        occlusion_tex_location,
+        TEX_UNIT_OCCLUSION as i32
+    ));
+    gl::call!(gl::Uniform1i(
+        emissive_tex_location,
+        TEX_UNIT_EMISSIVE as i32
+    ));
     gl::call!(gl::DeleteShader(vertex_shader));
     gl::call!(gl::DeleteShader(fragment_shader));
     ShaderProgram {

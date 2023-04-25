@@ -1,4 +1,4 @@
-use crate::renderer::draw_calls::{DrawCall, DrawCalls};
+use crate::renderer::draw_calls::{DrawCall, DrawCalls, Uniforms};
 use crate::renderer::gl;
 use glam::Mat4;
 
@@ -27,6 +27,7 @@ pub struct Gltf {
     gl_vaos: Vec<gl::types::GLuint>,
     gl_buffers: Vec<gl::types::GLuint>,
     gl_textures: Vec<gl::types::GLuint>,
+    gl_samplers: Vec<gl::types::GLuint>,
 }
 
 pub struct Scene {
@@ -48,7 +49,9 @@ pub struct Primitive {
     pub draw_call: DrawCall,
 }
 
-pub struct Material {}
+pub struct Material {
+    pub uniforms: Uniforms,
+}
 
 impl Gltf {
     pub fn draw(&self, draw_calls: &mut DrawCalls, model_transform: Mat4) {
@@ -63,12 +66,13 @@ impl Gltf {
             if let Some(mesh_index) = node.mesh_index {
                 for &primitive_index in &self.meshes[mesh_index].primitive_indices {
                     let primitive = &self.primitives[primitive_index];
+                    let uniforms = &self.materials[primitive.material_index].uniforms;
                     let mut draw_call = primitive.draw_call.clone();
                     // glTF spec section 3.7.4:
                     draw_call.front_face = (transform.determinant() > 0.0)
                         .then_some(gl::CCW)
                         .unwrap_or(gl::CW);
-                    draw_calls.add(draw_call, transform);
+                    draw_calls.add(uniforms, &draw_call, transform);
                 }
             }
             for &child_index in &node.child_node_indices {
@@ -91,6 +95,10 @@ impl Drop for Gltf {
         gl::call!(gl::DeleteTextures(
             self.gl_textures.len() as i32,
             self.gl_textures.as_ptr(),
+        ));
+        gl::call!(gl::DeleteSamplers(
+            self.gl_samplers.len() as i32,
+            self.gl_samplers.as_ptr(),
         ));
     }
 }

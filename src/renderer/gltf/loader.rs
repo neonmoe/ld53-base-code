@@ -1,5 +1,5 @@
 use crate::renderer::bumpalloc_buffer::BumpAllocatedBuffer;
-use crate::renderer::draw_calls::DrawCall;
+use crate::renderer::draw_calls::{DrawCall, Uniforms};
 use crate::renderer::{gl, gltf};
 use glam::{Mat4, Quat, Vec3};
 use image::imageops::FilterType;
@@ -11,6 +11,7 @@ use tinyjson::JsonValue;
 
 pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     let gltf: JsonValue = gltf.parse().unwrap();
+    let gltf = gltf.get::<HashMap<_, _>>().unwrap();
 
     // TODO: Measure how much of the buffers is unused after load (i.e. used by textures and index buffers)
     let buffers_json = gltf["buffers"].get::<Vec<_>>().unwrap();
@@ -258,11 +259,28 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         }
     }
 
-    let mut gl_textures = vec![0; images_json.len()];
+    let mut gl_textures = vec![0; images_json.len() + 4];
     gl::call!(gl::GenTextures(
         gl_textures.len() as i32,
         gl_textures.as_mut_ptr()
     ));
+    let white_tex = gl_textures[gl_textures.len() - 1];
+    let blue_tex = gl_textures[gl_textures.len() - 2];
+    let black_tex = gl_textures[gl_textures.len() - 3];
+    let gray_tex = gl_textures[gl_textures.len() - 4];
+    let make_pixel_tex = |tex: u32, color: [u8; 3]| {
+        let target = gl::TEXTURE_2D;
+        let ifmt = gl::RGBA as i32;
+        let fmt = gl::RGBA;
+        let type_ = gl::UNSIGNED_BYTE;
+        let pixels = color.as_ptr() as *const c_void;
+        gl::call!(gl::BindTexture(target, tex));
+        gl::call!(gl::TexImage2D(target, 0, ifmt, 1, 1, 0, fmt, type_, pixels));
+    };
+    make_pixel_tex(white_tex, [0xFF, 0xFF, 0xFF]);
+    make_pixel_tex(blue_tex, [0, 0, 0xFF]);
+    make_pixel_tex(black_tex, [0, 0, 0]);
+    make_pixel_tex(gray_tex, [0x7F, 0x7F, 0x7F]);
     for (i, image) in images_json.into_iter().enumerate() {
         let Some(is_srgb) = is_srgb[i] else {
             continue; // Not used by any material.
@@ -292,11 +310,11 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         };
 
         let mut parsed_image = image::load_from_memory(image_data).unwrap();
-        let (format, type_) = match parsed_image {
-            DynamicImage::ImageRgb8(_) => (gl::RGB, gl::UNSIGNED_BYTE),
-            DynamicImage::ImageRgba8(_) => (gl::RGBA, gl::UNSIGNED_BYTE),
-            DynamicImage::ImageRgb16(_) => (gl::RGB, gl::UNSIGNED_SHORT),
-            DynamicImage::ImageRgba16(_) => (gl::RGBA, gl::UNSIGNED_SHORT),
+        let (format, type_, bpp) = match parsed_image {
+            DynamicImage::ImageRgb8(_) => (gl::RGB, gl::UNSIGNED_BYTE, 3),
+            DynamicImage::ImageRgba8(_) => (gl::RGBA, gl::UNSIGNED_BYTE, 4),
+            DynamicImage::ImageRgb16(_) => (gl::RGB, gl::UNSIGNED_SHORT, 6),
+            DynamicImage::ImageRgba16(_) => (gl::RGBA, gl::UNSIGNED_SHORT, 8),
             img => panic!("image {img:?} is of an unsupported format"),
         };
         let internal_format = match (is_srgb, format) {
@@ -314,6 +332,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                 parsed_image.height() as i32,
                 parsed_image.as_bytes(),
             );
+            assert_eq!(width * height * bpp, data.len() as i32);
             gl::call!(gl::TexImage2D(
                 gl::TEXTURE_2D,
                 mip_level,
@@ -344,16 +363,140 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     // - would probably be wise to batch up e.g. all baseColorFactors into one UBO, etc.,
     //   then store offsets into that in the materials
 
+    let samplers_json_fallback = Vec::with_capacity(0);
+    let samplers_json = gltf
+        .get("samplers")
+        .map(|v| v.get::<Vec<_>>().unwrap())
+        .unwrap_or(&samplers_json_fallback);
+    let mut gl_samplers = vec![0; samplers_json.len() + 1];
+    gl::call!(gl::GenSamplers(
+        gl_samplers.len() as i32,
+        gl_samplers.as_mut_ptr()
+    ));
+    let default_sampler = gl_samplers[gl_samplers.len() - 1];
+    gl::call!(gl::SamplerParameteri(
+        default_sampler,
+        gl::TEXTURE_MAG_FILTER,
+        gl::LINEAR as i32,
+    ));
+    gl::call!(gl::SamplerParameteri(
+        default_sampler,
+        gl::TEXTURE_MIN_FILTER,
+        gl::LINEAR_MIPMAP_LINEAR as i32,
+    ));
+    gl::call!(gl::SamplerParameteri(
+        default_sampler,
+        gl::TEXTURE_WRAP_S,
+        gl::REPEAT as i32,
+    ));
+    gl::call!(gl::SamplerParameteri(
+        default_sampler,
+        gl::TEXTURE_WRAP_T,
+        gl::REPEAT as i32,
+    ));
+    for (i, sampler) in samplers_json.into_iter().enumerate() {
+        let sampler = sampler.get::<HashMap<_, _>>().unwrap();
+        gl::call!(gl::SamplerParameteri(
+            gl_samplers[i],
+            gl::TEXTURE_MAG_FILTER,
+            sampler
+                .get("magFilter")
+                .map(take_usize)
+                .unwrap_or(gl::LINEAR as usize) as i32,
+        ));
+        gl::call!(gl::SamplerParameteri(
+            gl_samplers[i],
+            gl::TEXTURE_MIN_FILTER,
+            sampler
+                .get("minFilter")
+                .map(take_usize)
+                .unwrap_or(gl::LINEAR_MIPMAP_LINEAR as usize) as i32,
+        ));
+        gl::call!(gl::SamplerParameteri(
+            gl_samplers[i],
+            gl::TEXTURE_WRAP_S,
+            sampler.get("wrapS").map(take_usize).unwrap_or(10497) as i32,
+        ));
+        gl::call!(gl::SamplerParameteri(
+            gl_samplers[i],
+            gl::TEXTURE_WRAP_T,
+            sampler.get("wrapT").map(take_usize).unwrap_or(10497) as i32,
+        ));
+    }
+
+    let materials_json = gltf["materials"].get::<Vec<_>>().unwrap();
+    let mut materials = Vec::with_capacity(materials_json.len());
+    for material in materials_json {
+        let unpack_texture_info = |texture_info: &JsonValue| {
+            let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
+            // TODO: Support TEXCOORD_1
+            assert!(matches!(
+                texture_info.get("texCoord").map(take_usize),
+                None | Some(0)
+            ));
+            let texture = &textures_json[take_usize(&texture_info["index"])];
+            let texture = texture.get::<HashMap<_, _>>().unwrap();
+            let sampler = texture
+                .get("sampler")
+                .map(take_usize)
+                .unwrap_or(gl_samplers.len() - 1);
+            let source = take_usize(&texture["source"]);
+            (gl_textures[source], gl_samplers[sampler])
+        };
+
+        let material = material.get::<HashMap<_, _>>().unwrap();
+        let mut textures = [None; 5];
+        if let Some(pbr) = material.get("pbrMetallicRoughness") {
+            let pbr = pbr.get::<HashMap<_, _>>().unwrap();
+            if let Some(texture_info) = pbr.get("baseColorTexture") {
+                let (texture, sampler) = unpack_texture_info(texture_info);
+                textures[0] = Some((gltf::TEX_UNIT_BASE_COLOR, texture, sampler));
+            } else {
+                textures[0] = Some((gltf::TEX_UNIT_BASE_COLOR, white_tex, default_sampler));
+            }
+            if let Some(texture_info) = pbr.get("metallicRoughnessTexture") {
+                let (texture, sampler) = unpack_texture_info(texture_info);
+                textures[1] = Some((gltf::TEX_UNIT_METALLIC_ROUGHNESS, texture, sampler));
+            } else {
+                textures[1] = Some((gltf::TEX_UNIT_METALLIC_ROUGHNESS, gray_tex, default_sampler));
+            }
+        }
+        if let Some(texture_info) = material.get("normalTexture") {
+            // TODO: normal_texture_info.scale (should be included in ubo)
+            let (texture, sampler) = unpack_texture_info(texture_info);
+            textures[2] = Some((gltf::TEX_UNIT_NORMAL, texture, sampler));
+        } else {
+            textures[2] = Some((gltf::TEX_UNIT_NORMAL, blue_tex, default_sampler));
+        }
+        if let Some(texture_info) = material.get("occlusionTexture") {
+            // TODO: occlusion_texture_info.strength (should be included in ubo)
+            let (texture, sampler) = unpack_texture_info(texture_info);
+            textures[3] = Some((gltf::TEX_UNIT_OCCLUSION, texture, sampler));
+        } else {
+            textures[3] = Some((gltf::TEX_UNIT_OCCLUSION, white_tex, default_sampler));
+        }
+        if let Some(texture_info) = material.get("emissiveTexture") {
+            let (texture, sampler) = unpack_texture_info(texture_info);
+            textures[4] = Some((gltf::TEX_UNIT_EMISSIVE, texture, sampler));
+        } else {
+            textures[4] = Some((gltf::TEX_UNIT_EMISSIVE, black_tex, default_sampler));
+        }
+        materials.push(gltf::Material {
+            uniforms: Uniforms { textures },
+        });
+    }
+
     gltf::Gltf {
         scene,
         scenes,
         nodes,
         meshes,
-        materials: vec![],
+        materials,
         primitives,
         gl_vaos,
         gl_buffers,
         gl_textures,
+        gl_samplers,
     }
 }
 
