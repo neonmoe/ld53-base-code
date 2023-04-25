@@ -66,6 +66,7 @@ impl Renderer {
         gl::call!(gl::ClearColor(0.0, 0.0, 0.0, 1.0));
         gl::call!(gl::ClearDepthf(0.0));
         gl::call!(gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT));
+        gl::call!(gl::Enable(gl::CULL_FACE));
         gl::call!(gl::Enable(gl::DEPTH_TEST));
         gl::call!(gl::DepthFunc(gl::GREATER));
 

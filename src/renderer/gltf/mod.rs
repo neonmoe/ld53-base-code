@@ -62,7 +62,12 @@ impl Gltf {
             if let Some(mesh_index) = node.mesh_index {
                 for &primitive_index in &self.meshes[mesh_index].primitive_indices {
                     let primitive = &self.primitives[primitive_index];
-                    draw_calls.add(primitive.draw_call, transform);
+                    let mut draw_call = primitive.draw_call.clone();
+                    // glTF spec section 3.7.4:
+                    draw_call.front_face = (transform.determinant() > 0.0)
+                        .then_some(gl::CCW)
+                        .unwrap_or(gl::CW);
+                    draw_calls.add(draw_call, transform);
                 }
             }
             for &child_index in &node.child_node_indices {

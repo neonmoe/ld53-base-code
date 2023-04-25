@@ -202,6 +202,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                     index_byte_offset,
                     index_count,
                     disabled_all_ones_vertex_attribute,
+                    front_face: gl::CCW,
                 },
             });
             primitive_indices.push(primitive_index);

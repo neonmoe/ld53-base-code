@@ -21,6 +21,7 @@ pub struct DrawCall {
     /// needs to be provided at draw-time, and can't be saved in the VAO. So
     /// this holds the location of the vertex color attribute, if it's disabled.
     pub disabled_all_ones_vertex_attribute: Option<gl::types::GLuint>,
+    pub front_face: gl::types::GLenum,
 }
 
 #[derive(Default)]
@@ -66,6 +67,7 @@ impl DrawCalls {
 
             for (draw_call, instance_data) in draw_calls {
                 gl::call!(gl::BindVertexArray(draw_call.vao));
+                // Setup the transform vertex attribute
                 let transforms = bytemuck::cast_slice(&instance_data.transforms);
                 let (transforms_buffer, transforms_offset) =
                     self.temp_buffer.allocate_buffer(transforms);
@@ -84,9 +86,13 @@ impl DrawCalls {
                     ));
                     gl::call!(gl::VertexAttribDivisor(attrib_location, 1));
                 }
+                // Set color vertex attribute default value
                 if let Some(location) = draw_call.disabled_all_ones_vertex_attribute {
                     gl::call!(gl::VertexAttrib4f(location, 1.0, 1.0, 1.0, 1.0));
                 }
+                // Set the front face
+                gl::call!(gl::FrontFace(draw_call.front_face));
+                // Bind the index buffer
                 gl::call!(gl::BindBuffer(
                     gl::ELEMENT_ARRAY_BUFFER,
                     draw_call.index_buffer
