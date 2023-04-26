@@ -9,9 +9,25 @@ use std::ffi::c_void;
 use std::ptr;
 use tinyjson::JsonValue;
 
+#[track_caller]
 pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     let gltf: JsonValue = gltf.parse().unwrap();
     let gltf = gltf.get::<HashMap<_, _>>().unwrap();
+
+    if let Some(required_exts) = gltf.get("extensionsRequired") {
+        let required_exts = required_exts.get::<Vec<_>>().unwrap();
+        let unsupported_exts = required_exts
+            .iter()
+            .flat_map(
+                |ext_name: &JsonValue| match ext_name.get::<String>().unwrap().as_str() {
+                    ext_name => Some(ext_name),
+                },
+            )
+            .collect::<Vec<_>>();
+        if !unsupported_exts.is_empty() {
+            panic!("gltf requires unsupported extensions: {unsupported_exts:?}");
+        }
+    }
 
     // TODO: Measure how much of the buffers is unused after load (i.e. used by textures and index buffers)
     let buffers_json = gltf["buffers"].get::<Vec<_>>().unwrap();
@@ -355,11 +371,6 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             }
         }
     }
-
-    // TODO: Make the required uniforms from each material
-    // - included fields: materials, textures
-    // - would probably be wise to batch up e.g. all baseColorFactors into one UBO, etc.,
-    //   then store offsets into that in the materials
 
     let samplers_json_fallback = Vec::with_capacity(0);
     let samplers_json = gltf

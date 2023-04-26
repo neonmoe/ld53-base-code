@@ -33,7 +33,8 @@ unsafe impl bytemuck::Pod for UniformBlockMaterial {}
 
 pub struct ShaderProgram {
     pub program: gl::types::GLuint,
-    pub proj_view_matrix_location: gl::types::GLint,
+    pub proj_from_view_location: gl::types::GLint,
+    pub view_from_world_location: gl::types::GLint,
 }
 
 /// Compiles and returns the shader program which should be used to render the
@@ -43,41 +44,34 @@ pub fn create_program() -> ShaderProgram {
     let fragment_shader =
         gl::create_shader(gl::FRAGMENT_SHADER, include_str!("gltf_fragment.glsl"));
     let program = gl::create_program(&[vertex_shader, fragment_shader]);
-    let proj_view_matrix_location = gl::get_uniform_location(program, "proj_view_matrix").unwrap();
-    let base_color_tex_location = gl::get_uniform_location(program, "base_color_tex").unwrap();
-    let metallic_roughness_tex_location =
-        gl::get_uniform_location(program, "metallic_roughness_tex").unwrap();
-    let normal_tex_location = gl::get_uniform_location(program, "normal_tex").unwrap();
-    let occlusion_tex_location = gl::get_uniform_location(program, "occlusion_tex").unwrap();
-    let emissive_tex_location = gl::get_uniform_location(program, "emissive_tex").unwrap();
-    let material_ub_location = gl::get_uniform_block_index(program, "Material").unwrap();
     gl::call!(gl::UseProgram(program));
-    gl::call!(gl::Uniform1i(
-        base_color_tex_location,
-        TEX_UNIT_BASE_COLOR as i32
-    ));
-    gl::call!(gl::Uniform1i(
-        metallic_roughness_tex_location,
-        TEX_UNIT_METALLIC_ROUGHNESS as i32,
-    ));
-    gl::call!(gl::Uniform1i(normal_tex_location, TEX_UNIT_NORMAL as i32));
-    gl::call!(gl::Uniform1i(
-        occlusion_tex_location,
-        TEX_UNIT_OCCLUSION as i32
-    ));
-    gl::call!(gl::Uniform1i(
-        emissive_tex_location,
-        TEX_UNIT_EMISSIVE as i32
-    ));
-    gl::call!(gl::UniformBlockBinding(
-        program,
-        material_ub_location,
-        UNIFORM_BLOCK_MATERIAL,
-    ));
+    let proj_from_view_location = gl::get_uniform_location(program, "proj_from_view").unwrap();
+    let view_from_world_location = gl::get_uniform_location(program, "view_from_world").unwrap();
+
+    if let Some(location) = gl::get_uniform_location(program, "base_color_tex") {
+        gl::call!(gl::Uniform1i(location, TEX_UNIT_BASE_COLOR as i32));
+    }
+    if let Some(location) = gl::get_uniform_location(program, "metallic_roughness_tex") {
+        gl::call!(gl::Uniform1i(location, TEX_UNIT_METALLIC_ROUGHNESS as i32,));
+    }
+    if let Some(location) = gl::get_uniform_location(program, "normal_tex") {
+        gl::call!(gl::Uniform1i(location, TEX_UNIT_NORMAL as i32));
+    }
+    if let Some(location) = gl::get_uniform_location(program, "occlusion_tex") {
+        gl::call!(gl::Uniform1i(location, TEX_UNIT_OCCLUSION as i32));
+    }
+    if let Some(location) = gl::get_uniform_location(program, "emissive_tex") {
+        gl::call!(gl::Uniform1i(location, TEX_UNIT_EMISSIVE as i32));
+    }
+    if let Some(loc) = gl::get_uniform_block_index(program, "Material") {
+        let binding = UNIFORM_BLOCK_MATERIAL;
+        gl::call!(gl::UniformBlockBinding(program, loc, binding));
+    }
     gl::call!(gl::DeleteShader(vertex_shader));
     gl::call!(gl::DeleteShader(fragment_shader));
     ShaderProgram {
         program,
-        proj_view_matrix_location,
+        proj_from_view_location,
+        view_from_world_location,
     }
 }

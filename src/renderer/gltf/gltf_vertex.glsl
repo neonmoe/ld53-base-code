@@ -13,7 +13,8 @@ out vec3 tbn_tangent;
 out vec3 tbn_bitangent;
 out vec2 tex_coords;
 
-uniform mat4 proj_view_matrix;
+uniform mat4 proj_from_view;
+uniform mat4 view_from_world;
 
 void main() {
   vertex_color = COLOR_0;
@@ -21,5 +22,6 @@ void main() {
   tbn_tangent = normalize(TANGENT.xyz);
   tbn_bitangent = normalize(cross(tbn_normal, tbn_tangent) * TANGENT.w);
   tex_coords = TEXCOORD_0;
-  gl_Position = proj_view_matrix * MODEL_TRANSFORM * vec4(POSITION, 1.0);
+  gl_Position =
+      proj_from_view * view_from_world * MODEL_TRANSFORM * vec4(POSITION, 1.0);
 }

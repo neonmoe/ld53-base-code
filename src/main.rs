@@ -1,13 +1,15 @@
-use std::error::Error;
-use std::ffi::{c_int, c_void};
-use std::fmt::Display;
-use std::ptr;
-
+use anyhow::Context;
 use sdl2::event::{Event, WindowEvent};
+use sdl2::messagebox::{show_simple_message_box, MessageBoxFlag};
 use sdl2::rect::Point;
 use sdl2::sys::{SDL_Event, SDL_EventType, SDL_KeyCode};
 use sdl2::video::{GLProfile, Window};
 use sdl2::EventPump;
+use std::error::Error;
+use std::ffi::{c_int, c_void};
+use std::fmt::Display;
+use std::panic;
+use std::ptr;
 
 #[cfg(target_family = "wasm")]
 mod emscripten_h;
@@ -15,9 +17,21 @@ mod renderer;
 
 use renderer::Renderer;
 
-fn main() -> anyhow::Result<()> {
-    let sdl_context = sdl2::init().map_err(SdlErr)?;
-    let video = sdl_context.video().map_err(SdlErr)?;
+fn main() {
+    panic::set_hook(Box::new(|panic_info| {
+        exit_with_error(panic_info);
+    }));
+    if let Err(err) = _main() {
+        exit_with_error(format!("{:?}", err));
+    }
+}
+
+fn _main() -> anyhow::Result<()> {
+    let sdl_context = sdl2::init().map_err(SdlErr).context("sdl2::init failed")?;
+    let video = sdl_context
+        .video()
+        .map_err(SdlErr)
+        .context("sdl2 video subsystem init failed")?;
     let gl_attr = video.gl_attr();
     gl_attr.set_context_profile(GLProfile::GLES);
     gl_attr.set_context_version(3, 0);
@@ -29,8 +43,19 @@ fn main() -> anyhow::Result<()> {
         .window(env!("CARGO_PKG_NAME"), 948, 533)
         .resizable()
         .opengl()
-        .build()?;
-    let _gl_context = window.gl_create_context().map_err(SdlErr)?;
+        .build()
+        .context("window creation failed")?;
+    let _gl_context = match window
+        .gl_create_context()
+        .map_err(SdlErr)
+        .context("gl context creation failed")
+    {
+        Ok(ctx) => ctx,
+        #[cfg(target_family = "wasm")]
+        Err(err) => return Ok(()), // This is expected and should not "crash".
+        #[cfg(not(target_family = "wasm"))]
+        Err(err) => return Err(err),
+    };
 
     {
         // Set up OpenGL, draw a "loading screen"
@@ -46,7 +71,10 @@ fn main() -> anyhow::Result<()> {
         window.gl_swap_window();
     }
 
-    let event_pump = sdl_context.event_pump().map_err(SdlErr)?;
+    let event_pump = sdl_context
+        .event_pump()
+        .map_err(SdlErr)
+        .context("sdl event pump creation failed")?;
 
     // Set up an event filter to avoid too eager preventDefault()s on
     // emscripten.
@@ -144,6 +172,29 @@ extern "C" fn run_frame() {
     let (w, h) = window.drawable_size();
     renderer.render(w as f32 / h as f32);
     window.gl_swap_window();
+}
+
+fn exit_with_error<D: Display>(err: D) -> ! {
+    #[cfg(target_family = "wasm")]
+    emscripten_h::run_javascript(
+        &format!(
+            "document.getElementById('browser-support-warning').innerHTML = \"<p>The game crashed! You can try the desktop version instead.</p>\
+            <p><details><summary>Crash report:</summary><pre>{}</pre></details></p>\"",
+            err.to_string().replace("\\", "\\\\").replace("\n", "\\n").replace("\"", "\\\""),
+        ),
+    );
+    #[cfg(not(target_family = "wasm"))]
+    {
+        eprintln!("fatal error: {err}");
+        let window = unsafe { STATE.as_ref() }.map(|state| &state.window);
+        let _ = show_simple_message_box(
+            MessageBoxFlag::ERROR,
+            "Game crashed!",
+            &format!("Crash report:\n\n{err}"),
+            window,
+        );
+    }
+    std::process::exit(1)
 }
 
 #[derive(Debug)]

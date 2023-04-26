@@ -23,6 +23,15 @@ uniform Material {
   vec4 emissive_factor;
 };
 
+vec3 aces_filmic(vec3 x) {
+  float a = 2.51;
+  float b = 0.03;
+  float c = 2.43;
+  float d = 0.59;
+  float e = 0.14;
+  return clamp(x * (a * x + b) / (x * (c * x + d) + e), vec3(0), vec3(1));
+}
+
 void main() {
   vec4 texel_base_color = texture(base_color_tex, tex_coords);
   vec2 texel_metallic_roughness =
@@ -44,12 +53,10 @@ void main() {
   float pixel_occlusion = 1.0 + occlusion_strength * (texel_occlusion - 1.0);
   vec3 pixel_emissive = texel_emissive.rgb * emissive_factor.rgb;
 
-  float brightness =
-      0.2 * pixel_occlusion +
-      0.8 * max(0.0, dot(normalize(vec3(1.0, 1.0, -1.0)), pixel_normal));
-  // "Use" these as well, so that the uniforms don't get optimized out
-  brightness += (pixel_metallic + pixel_roughness) * 0.001;
-  vec3 output_linear_color = pixel_base_color * brightness + pixel_emissive;
+  float light_indirect = 0.1;
+  float brightness = light_indirect * pixel_occlusion;
+  vec3 output_linear_color =
+      aces_filmic(pixel_base_color * brightness + pixel_emissive);
 
   // The framebuffer is not SRGB, so we transform the linear color to
   // close-enough-to-srgb.
