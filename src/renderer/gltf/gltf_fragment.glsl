@@ -4,15 +4,17 @@ precision highp int;
 
 #define PI 3.14159265
 #define MAX_LIGHTS 32
+#define VIEW_VECTOR vec3(0.0, 0.0, 1.0)
 
 out vec4 FRAG_COLOR;
 
-in vec3 world_pos;
+in vec3 view_pos;
 in vec3 vertex_color;
 in vec3 vertex_normal;
 in vec4 vertex_tangent;
 in vec2 tex_coords;
 
+uniform mat4 view_from_world;
 uniform sampler2D base_color_tex;
 uniform sampler2D metallic_roughness_tex;
 uniform sampler2D normal_tex;
@@ -46,6 +48,39 @@ vec3 aces_filmic(vec3 x) {
 
 vec3 diffuse_brdf(vec3 color) { return color / PI; }
 
+// There's no basis or source for any of this, except the idea of dotting the
+// reflected direction with the view direction. I just want some speculars.
+float specular(vec3 reflected_dir, vec3 view_dir, float shininess) {
+  return pow(max(0.0, dot(reflected_dir, view_dir)), shininess * 30.0) *
+         pow(shininess, 2.0);
+}
+
+void get_incoming_light(inout vec3 out_diffuse, inout vec3 out_specular,
+                        int light_index, int kind, vec3 normal,
+                        float shininess) {
+  // TODO: Calculate light contribution in a physically based way. Don't have
+  // the time to do this before LD53 though.
+
+  // TODO: Handle spot and directional lights
+
+  vec3 color = light_color_and_kind[light_index].rgb;
+  vec3 to_light =
+      (view_from_world * light_position[light_index]).xyz - view_pos;
+  vec3 light_dir = normalize(to_light);
+  float distance_squared = dot(to_light, to_light);
+
+  float light_power = light_intensity_params[light_index].x / 1500.0;
+  float k_diffuse = max(0.0, dot(normal, light_dir));
+  float k_specular = 0.0;
+  if (k_diffuse > 0.0) {
+    vec3 reflected = reflect(light_dir, normal);
+    k_specular = specular(reflected, VIEW_VECTOR, shininess);
+  }
+
+  out_diffuse += k_diffuse * color * light_power / distance_squared;
+  out_specular += k_specular * color * light_power / distance_squared;
+}
+
 void main() {
   vec4 texel_base_color = texture(base_color_tex, tex_coords);
   vec2 texel_metallic_roughness =
@@ -70,41 +105,22 @@ void main() {
   float pixel_occlusion = 1.0 + material_params.w * (texel_occlusion - 1.0);
   vec3 light_emitted = texel_emissive.rgb * emissive_factor.rgb;
 
-  float ambient_brightness = 0.3 * pixel_occlusion;
-  vec3 light_incoming = vec3(ambient_brightness);
+  float ambient_brightness = 0.2 * pixel_occlusion;
+  // Just to give a little shape to everything
+  float ambient_fudge = -max(0.0, dot(-VIEW_VECTOR, pixel_normal)) * 0.1;
+  vec3 light_diffuse = vec3(ambient_brightness + ambient_fudge);
+  vec3 light_specular = vec3(0.0);
   for (int i = 0; i < MAX_LIGHTS; i++) {
     int kind = int(light_color_and_kind[i].w);
     if (kind == 0) {
       break;
     }
-    vec3 color = light_color_and_kind[i].rgb;
-    vec3 to_light = light_position[i].xyz - world_pos;
-    // TODO: Handle spot and directional lights
-    float distance_squared = dot(to_light, to_light);
-    // The unit for point light intensity in KHR_lights_punctual is the candela,
-    // which is luminous intensity.
-    float luminous_intensity = light_intensity_params[i].x;
-    // For PBR rendering, we want the radiant intensity (watts) instead. (I
-    // think?) (TODO: The luminosity function is missing here, do we need it?)
-    // Formula from: https://en.wikipedia.org/wiki/Luminous_intensity#Usage
-    float radiant_intensity = luminous_intensity / 683.0;
-    // Point light radiant intensity to radiant flux hack from:
-    // https://pbr-book.org/3ed-2018/Light_Sources/Point_Lights
-    float radiant_flux = radiant_intensity / distance_squared;
-    float cos_factor = max(0.0, dot(pixel_normal, normalize(to_light)));
-    // Without this, the scene is definitely too bright. I'm unsure if this is
-    // the right factor though - this converts back from flux (W) to intensity
-    // (W/sr), but afaik, we'd actually want the radiance (W/sr/m²)? Otoh, I
-    // don't know what the area to divide by would be, so I guess radiant
-    // intensity it is, for now.
-    float fudge_factor = 1.0 / (4.0 * PI);
-    light_incoming += color * radiant_intensity * cos_factor * fudge_factor;
+    get_incoming_light(light_diffuse, light_specular, i, kind, pixel_normal,
+                       (1.0 - pixel_roughness));
   }
 
-  // TODO: Add the rest of the BRDFs
-  // (Very "draw the rest of the fucking owl" energy, I know.)
-  vec3 brdf = diffuse_brdf(pixel_base_color);
-  vec3 light_outgoing_to_camera = light_emitted + brdf * light_incoming;
+  vec3 light_outgoing_to_camera =
+      light_emitted + pixel_base_color * light_diffuse + light_specular;
   vec3 output_linear_color = aces_filmic(light_outgoing_to_camera);
 
   // The framebuffer is not SRGB, so we transform the linear color to
