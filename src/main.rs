@@ -68,6 +68,7 @@ fn _main() -> anyhow::Result<()> {
 
         gl::call!(gl::ClearColor(0.2, 0.4, 0.2, 1.0));
         gl::call!(gl::Clear(gl::COLOR_BUFFER_BIT));
+        // TODO: Render a loading screen
         window.gl_swap_window();
     }
 
@@ -105,7 +106,9 @@ fn _main() -> anyhow::Result<()> {
 
     #[cfg(target_family = "wasm")]
     {
-        emscripten_h::run_javascript("document.getElementById('browser-support-warning').innerHTML = \"<p>Loading... This browser seems to support WebGL 2 and WASM, but if this takes a long time, try the desktop version instead.</p>\"");
+        emscripten_h::run_javascript(
+            "document.getElementById('browser-support-warning').innerHTML = \"<p>Loading...</p>\"",
+        );
         // Let the JS runtime get everything else (including updating the
         // loading screen and the above notice) out of the way before continuing:
         unsafe { emscripten_h::emscripten_sleep(100) };

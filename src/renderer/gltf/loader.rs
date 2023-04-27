@@ -1,13 +1,18 @@
 use crate::renderer::bumpalloc_buffer::BumpAllocatedBuffer;
 use crate::renderer::draw_calls::{DrawCall, Uniforms};
-use crate::renderer::{gl, gltf};
-use glam::{Mat4, Quat, Vec3, Vec4};
+use crate::renderer::gltf::{UniformBlockLights, MAX_LIGHTS};
+use crate::renderer::{gl, gltf, FORWARD};
+use bytemuck::Zeroable;
+use glam::{Mat4, Quat, Vec3, Vec4, Vec4Swizzles};
 use image::imageops::FilterType;
 use image::DynamicImage;
 use std::collections::HashMap;
+use std::f32::consts::FRAC_PI_4;
 use std::ffi::c_void;
 use std::ptr;
 use tinyjson::JsonValue;
+
+// TODO: load_glb
 
 #[track_caller]
 pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
@@ -20,6 +25,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             .iter()
             .flat_map(
                 |ext_name: &JsonValue| match ext_name.get::<String>().unwrap().as_str() {
+                    "KHR_lights_punctual" => None,
                     ext_name => Some(ext_name),
                 },
             )
@@ -95,7 +101,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             let mut matrix: [f32; 16] = [0.0; 16];
             assert_eq!(16, matrix_values.len());
             for (i, value) in matrix_values.into_iter().enumerate() {
-                matrix[i] = *value.get::<f64>().unwrap() as f32;
+                matrix[i] = take_f32(&value);
             }
             Mat4::from_cols_slice(&matrix)
         } else {
@@ -127,7 +133,7 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         gl_vaos.as_mut_ptr()
     ));
     let mut index_buffer_allocator =
-        BumpAllocatedBuffer::new(gl::ELEMENT_ARRAY_BUFFER, gl::STATIC_DRAW);
+        BumpAllocatedBuffer::new(gl::ELEMENT_ARRAY_BUFFER, gl::DYNAMIC_DRAW);
     gl_buffers.push(index_buffer_allocator.get_buffer(true));
     let mut primitives = Vec::with_capacity(primitive_count);
     let mut meshes = Vec::with_capacity(meshes_json.len());
@@ -281,19 +287,19 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         gl_textures.as_mut_ptr()
     ));
     let white_tex = gl_textures[gl_textures.len() - 1];
-    let blue_tex = gl_textures[gl_textures.len() - 2];
+    let normal_tex = gl_textures[gl_textures.len() - 2];
     let black_tex = gl_textures[gl_textures.len() - 3];
     let make_pixel_tex = |tex: u32, color: [u8; 3]| {
         let target = gl::TEXTURE_2D;
-        let ifmt = gl::RGBA as i32;
-        let fmt = gl::RGBA;
+        let ifmt = gl::RGB as i32;
+        let fmt = gl::RGB;
         let type_ = gl::UNSIGNED_BYTE;
         let pixels = color.as_ptr() as *const c_void;
         gl::call!(gl::BindTexture(target, tex));
         gl::call!(gl::TexImage2D(target, 0, ifmt, 1, 1, 0, fmt, type_, pixels));
     };
     make_pixel_tex(white_tex, [0xFF, 0xFF, 0xFF]);
-    make_pixel_tex(blue_tex, [0, 0, 0xFF]);
+    make_pixel_tex(normal_tex, [0x7F, 0x7F, 0xFF]);
     make_pixel_tex(black_tex, [0, 0, 0]);
     for (i, image) in images_json.into_iter().enumerate() {
         let Some(is_srgb) = is_srgb[i] else {
@@ -433,11 +439,69 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         ));
     }
 
+    let mut uniform_buffer_allocator =
+        BumpAllocatedBuffer::new(gl::UNIFORM_BUFFER, gl::DYNAMIC_DRAW);
+    gl_buffers.push(uniform_buffer_allocator.get_buffer(true));
+
+    // KHR_lights_punctual extension:
+    let lights_json = gltf["extensions"]["KHR_lights_punctual"]["lights"]
+        .get::<Vec<_>>()
+        .unwrap();
+    let mut lights = UniformBlockLights::zeroed();
+    let mut light_node_index = 0;
+    for (node_index, node) in nodes_json.into_iter().enumerate() {
+        if let Some(khr_lights_punctual) = node
+            .get::<HashMap<_, _>>()
+            .unwrap()
+            .get("extensions")
+            .map(|extensions| extensions.get::<HashMap<_, _>>().unwrap())
+            .map(|extensions| extensions.get("KHR_lights_punctual"))
+            .flatten()
+        {
+            if light_node_index >= MAX_LIGHTS {
+                panic!("this gltf renderer only supports a maximum of {MAX_LIGHTS} lights");
+            }
+
+            let light_index = take_usize(&khr_lights_punctual["light"]);
+            let light = lights_json[light_index].get::<HashMap<_, _>>().unwrap();
+            let color = light.get("color").map(take_vec3).unwrap_or(Vec3::ONE);
+            let intensity = light.get("intensity").map(take_f32).unwrap_or(1.0);
+            let kind = match light["type"].get::<String>().unwrap().as_str() {
+                "directional" => 1,
+                "point" => 2,
+                "spot" => 3,
+                kind => panic!("light has a non-standard type '{kind}'"),
+            };
+            let transform = nodes[node_index].transform;
+            let inner_angle = light.get("innerConeAngle").map(take_f32).unwrap_or(0.0);
+            let outer_angle = light
+                .get("outerConeAngle")
+                .map(take_f32)
+                .unwrap_or(FRAC_PI_4);
+            let r = (color.x * 255.0) as u8 as i32;
+            let g = (color.y * 255.0) as u8 as i32;
+            let b = (color.z * 255.0) as u8 as i32;
+            let i = light_node_index;
+            lights.kind_and_color[i] = (kind << 24) + (r << 16) + (g << 8) + b;
+            lights.intensity[i] = intensity;
+            // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual/README.md#inner-and-outer-cone-angles
+            lights.light_angle_scale[i] = 1.0 / 0.001f32.max(inner_angle.cos() - outer_angle.cos());
+            lights.light_angle_offset[i] = -outer_angle.cos() * lights.light_angle_scale[i];
+            lights.position[i] = (transform * Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz();
+            lights.direction[i] = (transform * Vec4::from((FORWARD, 0.0))).xyz();
+            light_node_index += 1;
+        }
+    }
+    let lights_uniform_block = {
+        let lights_data = [lights];
+        let lights_data = bytemuck::cast_slice(&lights_data);
+        let (ubo, ubo_offset) = uniform_buffer_allocator.allocate_buffer(lights_data);
+        let ubo_size = lights_data.len();
+        (gltf::UNIFORM_BLOCK_LIGHTS, ubo, ubo_offset, ubo_size)
+    };
+
     let materials_json = gltf["materials"].get::<Vec<_>>().unwrap();
     let mut materials = Vec::with_capacity(materials_json.len());
-    let mut uniform_buffer_allocator =
-        BumpAllocatedBuffer::new(gl::UNIFORM_BUFFER, gl::STATIC_DRAW);
-    gl_buffers.push(uniform_buffer_allocator.get_buffer(true));
     for material in materials_json {
         let unpack_texture_info = |texture_info: &JsonValue| {
             let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
@@ -487,17 +551,17 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             }
             if let Some(factor) = pbr.get("baseColorFactor") {
                 let factor = factor.get::<Vec<_>>().unwrap();
-                let x = *factor[0].get::<f64>().unwrap() as f32;
-                let y = *factor[1].get::<f64>().unwrap() as f32;
-                let z = *factor[2].get::<f64>().unwrap() as f32;
-                let w = *factor[3].get::<f64>().unwrap() as f32;
+                let x = take_f32(&factor[0]);
+                let y = take_f32(&factor[1]);
+                let z = take_f32(&factor[2]);
+                let w = take_f32(&factor[3]);
                 material_buffer.base_color_factor = Vec4::new(x, y, z, w);
             }
             if let Some(factor) = pbr.get("metallicFactor") {
-                material_buffer.metallic_factor = *factor.get::<f64>().unwrap() as f32;
+                material_buffer.metallic_factor = take_f32(&factor);
             }
             if let Some(factor) = pbr.get("roughnessFactor") {
-                material_buffer.roughness_factor = *factor.get::<f64>().unwrap() as f32;
+                material_buffer.roughness_factor = take_f32(&factor);
             }
         }
         if let Some(texture_info) = material.get("normalTexture") {
@@ -505,17 +569,17 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             textures[2] = Some((gltf::TEX_UNIT_NORMAL, texture, sampler));
             let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
             if let Some(factor) = texture_info.get("scale") {
-                material_buffer.normal_scale = *factor.get::<f64>().unwrap() as f32;
+                material_buffer.normal_scale = take_f32(&factor);
             }
         } else {
-            textures[2] = Some((gltf::TEX_UNIT_NORMAL, blue_tex, default_sampler));
+            textures[2] = Some((gltf::TEX_UNIT_NORMAL, normal_tex, default_sampler));
         }
         if let Some(texture_info) = material.get("occlusionTexture") {
             let (texture, sampler) = unpack_texture_info(texture_info);
             textures[3] = Some((gltf::TEX_UNIT_OCCLUSION, texture, sampler));
             let texture_info = texture_info.get::<HashMap<_, _>>().unwrap();
             if let Some(factor) = texture_info.get("strength") {
-                material_buffer.occlusion_strength = *factor.get::<f64>().unwrap() as f32;
+                material_buffer.occlusion_strength = take_f32(&factor);
             }
         } else {
             textures[3] = Some((gltf::TEX_UNIT_OCCLUSION, white_tex, default_sampler));
@@ -528,9 +592,9 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         }
         if let Some(factor) = material.get("emissiveFactor") {
             let factor = factor.get::<Vec<_>>().unwrap();
-            let x = *factor[0].get::<f64>().unwrap() as f32;
-            let y = *factor[1].get::<f64>().unwrap() as f32;
-            let z = *factor[2].get::<f64>().unwrap() as f32;
+            let x = take_f32(&factor[0]);
+            let y = take_f32(&factor[1]);
+            let z = take_f32(&factor[2]);
             material_buffer.emissive_factor = Vec4::new(x, y, z, 1.0);
         }
 
@@ -538,7 +602,10 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         let material_data = bytemuck::cast_slice(&material_data);
         let (ubo, ubo_offset) = uniform_buffer_allocator.allocate_buffer(material_data);
         let ubo_size = material_data.len();
-        let ubos = [Some((gltf::UNIFORM_BLOCK_MATERIAL, ubo, ubo_offset, ubo_size)); 1];
+        let ubos = [
+            Some((gltf::UNIFORM_BLOCK_MATERIAL, ubo, ubo_offset, ubo_size)),
+            Some(lights_uniform_block),
+        ];
 
         materials.push(gltf::Material {
             uniforms: Uniforms { textures, ubos },
@@ -565,7 +632,13 @@ fn take_usize(json_value: &JsonValue) -> usize {
     *i as usize
 }
 
-/// Return Vec3 if JsonValue is an array, otherwise None.
+/// Return f32 if JsonValue is a number, otherwise panic.
+fn take_f32(json_value: &JsonValue) -> f32 {
+    let f: &f64 = json_value.get().unwrap();
+    *f as f32
+}
+
+/// Return Vec3 if JsonValue is an array, otherwise panic.
 fn take_vec3(json_value: &JsonValue) -> Vec3 {
     let values: &Vec<JsonValue> = json_value.get().unwrap();
     assert_eq!(3, values.len());
@@ -575,7 +648,7 @@ fn take_vec3(json_value: &JsonValue) -> Vec3 {
     Vec3::new(x, y, z)
 }
 
-/// Return Quat if JsonValue is an array, otherwise None.
+/// Return Quat if JsonValue is an array, otherwise panic.
 fn take_quat(json_value: &JsonValue) -> Quat {
     let values: &Vec<JsonValue> = json_value.get().unwrap();
     assert_eq!(4, values.len());

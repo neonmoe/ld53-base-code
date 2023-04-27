@@ -7,21 +7,25 @@ layout(location = 4) in vec2 TEXCOORD_1;
 layout(location = 5) in vec3 COLOR_0;
 layout(location = 6) in mat4 MODEL_TRANSFORM;
 
+out vec3 world_pos;
 out vec3 vertex_color;
-out vec3 tbn_normal;
-out vec3 tbn_tangent;
-out vec3 tbn_bitangent;
+out vec3 vertex_normal;
+out vec4 vertex_tangent;
 out vec2 tex_coords;
 
 uniform mat4 proj_from_view;
 uniform mat4 view_from_world;
 
 void main() {
+  // TODO: Move this to the CPU
+  mat3 inverse_transpose_model_transfrom =
+      transpose(inverse(mat3(MODEL_TRANSFORM)));
+  vec4 world_position = MODEL_TRANSFORM * vec4(POSITION, 1.0);
+  world_pos = world_position.xyz;
   vertex_color = COLOR_0;
-  tbn_normal = normalize(NORMAL);
-  tbn_tangent = normalize(TANGENT.xyz);
-  tbn_bitangent = normalize(cross(tbn_normal, tbn_tangent) * TANGENT.w);
+  vertex_normal = normalize(inverse_transpose_model_transfrom * NORMAL);
+  vertex_tangent = vec4(
+      normalize(inverse_transpose_model_transfrom * TANGENT.xyz), TANGENT.w);
   tex_coords = TEXCOORD_0;
-  gl_Position =
-      proj_from_view * view_from_world * MODEL_TRANSFORM * vec4(POSITION, 1.0);
+  gl_Position = proj_from_view * view_from_world * world_position;
 }

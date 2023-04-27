@@ -1,5 +1,4 @@
-use glam::{Mat4, Vec3};
-use std::f32::consts::TAU;
+use glam::{Mat4, Vec3, Vec4};
 
 mod bumpalloc_buffer;
 mod draw_calls;
@@ -7,6 +6,16 @@ pub mod gl;
 pub mod gltf;
 
 pub use draw_calls::DrawCalls;
+
+/// The "up" vector in world-space (which is in glTF's coordinate system, for
+/// now).
+pub const UP: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+/// The "right" vector in world-space (which is in glTF's coordinate system, for
+/// now).
+pub const RIGHT: Vec3 = Vec3::new(-1.0, 0.0, 0.0);
+/// The "forward" vector in world-space (which is in glTF's coordinate system,
+/// for now).
+pub const FORWARD: Vec3 = Vec3::new(0.0, 0.0, 1.0);
 
 pub struct Renderer {
     test_model: gltf::Gltf,
@@ -78,7 +87,12 @@ impl Renderer {
         let view_matrix = Mat4::IDENTITY.to_cols_array();
         // OpenGL clip space: right-handed, +X right, +Y up, +Z backward (out of screen).
         // GLTF:              right-handed, +X left, +Y up, +Z forward (into the screen).
-        let to_opengl_basis = Mat4::from_rotation_y(TAU / 2.0);
+        let to_opengl_basis = Mat4::from_cols(
+            (RIGHT, 0.0).into(),    // +X is right in OpenGL clip space
+            (UP, 0.0).into(),       // +Y is up in OpenGL clip space
+            (-FORWARD, 0.0).into(), // +Z is backward in OpenGL clip space
+            Vec4::new(0.0, 0.0, 0.0, 1.0),
+        );
         let proj_matrix = (Mat4::perspective_rh_gl(74f32.to_radians(), aspect_ratio, 100.0, 0.3)
             * to_opengl_basis)
             .to_cols_array();

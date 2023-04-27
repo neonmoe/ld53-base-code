@@ -12,7 +12,7 @@ pub struct Uniforms {
     pub textures: [Option<(u32, u32, u32)>; 5],
     /// The OpenGL uniform buffers `buffer` to bind at indices `i`, where each
     /// element of this array is `(i, buffer, offset, size)`.
-    pub ubos: [Option<(u32, u32, usize, usize)>; 1],
+    pub ubos: [Option<(u32, u32, usize, usize)>; 2],
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
