@@ -3,7 +3,7 @@ use crate::renderer::draw_calls::{DrawCall, Uniforms};
 use crate::renderer::gltf::{UniformBlockLights, MAX_LIGHTS};
 use crate::renderer::{gl, gltf, FORWARD};
 use bytemuck::Zeroable;
-use glam::{Mat4, Quat, Vec3, Vec4, Vec4Swizzles};
+use glam::{Mat4, Quat, Vec3, Vec4};
 use image::imageops::FilterType;
 use image::DynamicImage;
 use std::collections::HashMap;
@@ -467,9 +467,9 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             let color = light.get("color").map(take_vec3).unwrap_or(Vec3::ONE);
             let intensity = light.get("intensity").map(take_f32).unwrap_or(1.0);
             let kind = match light["type"].get::<String>().unwrap().as_str() {
-                "directional" => 1,
-                "point" => 2,
-                "spot" => 3,
+                "directional" => 1.0,
+                "point" => 2.0,
+                "spot" => 3.0,
                 kind => panic!("light has a non-standard type '{kind}'"),
             };
             let transform = nodes[node_index].transform;
@@ -478,17 +478,16 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
                 .get("outerConeAngle")
                 .map(take_f32)
                 .unwrap_or(FRAC_PI_4);
-            let r = (color.x * 255.0) as u8 as i32;
-            let g = (color.y * 255.0) as u8 as i32;
-            let b = (color.z * 255.0) as u8 as i32;
-            let i = light_node_index;
-            lights.kind_and_color[i] = (kind << 24) + (r << 16) + (g << 8) + b;
-            lights.intensity[i] = intensity;
             // https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Khronos/KHR_lights_punctual/README.md#inner-and-outer-cone-angles
-            lights.light_angle_scale[i] = 1.0 / 0.001f32.max(inner_angle.cos() - outer_angle.cos());
-            lights.light_angle_offset[i] = -outer_angle.cos() * lights.light_angle_scale[i];
-            lights.position[i] = (transform * Vec4::new(0.0, 0.0, 0.0, 1.0)).xyz();
-            lights.direction[i] = (transform * Vec4::from((FORWARD, 0.0))).xyz();
+            let light_angle_scale = 1.0 / 0.001f32.max(inner_angle.cos() - outer_angle.cos());
+            let light_angle_offset = -outer_angle.cos() * light_angle_scale;
+
+            let i = light_node_index;
+            lights.color_and_kind[i] = Vec4::from((color, kind));
+            lights.intensity_params[i] =
+                Vec4::new(intensity, light_angle_scale, light_angle_offset, 0.0);
+            lights.position[i] = transform * Vec4::new(0.0, 0.0, 0.0, 1.0);
+            lights.direction[i] = transform * Vec4::from((FORWARD, 0.0));
             light_node_index += 1;
         }
     }

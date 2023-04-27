@@ -1,6 +1,5 @@
 use anyhow::Context;
 use sdl2::event::{Event, WindowEvent};
-use sdl2::messagebox::{show_simple_message_box, MessageBoxFlag};
 use sdl2::rect::Point;
 use sdl2::sys::{SDL_Event, SDL_EventType, SDL_KeyCode};
 use sdl2::video::{GLProfile, Window};
@@ -52,7 +51,7 @@ fn _main() -> anyhow::Result<()> {
     {
         Ok(ctx) => ctx,
         #[cfg(target_family = "wasm")]
-        Err(err) => return Ok(()), // This is expected and should not "crash".
+        Err(_) => return Ok(()), // This is expected and should not "crash".
         #[cfg(not(target_family = "wasm"))]
         Err(err) => return Err(err),
     };
@@ -188,6 +187,8 @@ fn exit_with_error<D: Display>(err: D) -> ! {
     );
     #[cfg(not(target_family = "wasm"))]
     {
+        use sdl2::messagebox::{show_simple_message_box, MessageBoxFlag};
+
         eprintln!("fatal error: {err}");
         let window = unsafe { STATE.as_ref() }.map(|state| &state.window);
         let _ = show_simple_message_box(

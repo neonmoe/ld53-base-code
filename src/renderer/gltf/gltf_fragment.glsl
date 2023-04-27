@@ -18,21 +18,21 @@ uniform sampler2D metallic_roughness_tex;
 uniform sampler2D normal_tex;
 uniform sampler2D occlusion_tex;
 uniform sampler2D emissive_tex;
-uniform Material {
+layout(std140) uniform Material {
   vec4 base_color_factor;
-  float metallic_factor;
-  float roughness_factor;
-  float normal_scale;
-  float occlusion_strength;
+  // x: metallic factor, y: roughness factor, z: normal scale, w: occlusion
+  // strength
+  vec4 material_params;
   vec4 emissive_factor;
 };
-uniform Lights {
-  int light_kind_and_color[MAX_LIGHTS];
-  float light_intensity[MAX_LIGHTS];
-  float light_angle_scale[MAX_LIGHTS];
-  float light_angle_offset[MAX_LIGHTS];
-  vec3 light_position[MAX_LIGHTS];
-  vec3 light_direction[MAX_LIGHTS];
+layout(std140) uniform Lights {
+  // w: 0.0 as the null terminator, 1.0: directional, 2.0: point, 3.0: spot,
+  // xyz: rgb
+  vec4 light_color_and_kind[MAX_LIGHTS];
+  // x: intensity, y: angle scale, z: angle offset
+  vec4 light_intensity_params[MAX_LIGHTS];
+  vec4 light_position[MAX_LIGHTS];
+  vec4 light_direction[MAX_LIGHTS];
 };
 
 vec3 aces_filmic(vec3 x) {
@@ -56,37 +56,34 @@ void main() {
 
   vec3 pixel_base_color =
       texel_base_color.rgb * vertex_color * base_color_factor.rgb;
-  float pixel_metallic = texel_metallic_roughness.x * metallic_factor;
-  float pixel_roughness = texel_metallic_roughness.y * roughness_factor;
+  float pixel_metallic = texel_metallic_roughness.x * material_params.x;
+  float pixel_roughness = texel_metallic_roughness.y * material_params.y;
 
   vec3 tangent_space_normal =
-      normalize(vec3(texel_normal.xy * normal_scale, texel_normal.z));
+      normalize(vec3(texel_normal.xy * material_params.z, texel_normal.z));
   vec3 vertex_bitangent =
       normalize(cross(vertex_normal, vertex_tangent.xyz) * vertex_tangent.w);
   vec3 pixel_normal =
       normalize(mat3(vertex_tangent.xyz, vertex_bitangent, vertex_normal) *
                 tangent_space_normal);
 
-  float pixel_occlusion = 1.0 + occlusion_strength * (texel_occlusion - 1.0);
+  float pixel_occlusion = 1.0 + material_params.w * (texel_occlusion - 1.0);
   vec3 light_emitted = texel_emissive.rgb * emissive_factor.rgb;
 
   float ambient_brightness = 0.3 * pixel_occlusion;
   vec3 light_incoming = vec3(ambient_brightness);
   for (int i = 0; i < MAX_LIGHTS; i++) {
-    int kind_and_color = light_kind_and_color[i];
-    int kind = kind_and_color >> 24;
+    int kind = int(light_color_and_kind[i].w);
     if (kind == 0) {
       break;
     }
-    vec3 color = vec3(float((kind_and_color >> 16) & 0xFF) / 255.0,
-                      float((kind_and_color >> 8) & 0xFF) / 255.0,
-                      float(kind_and_color & 0xFF) / 255.0);
-    vec3 to_light = light_position[i] - world_pos;
+    vec3 color = light_color_and_kind[i].rgb;
+    vec3 to_light = light_position[i].xyz - world_pos;
     // TODO: Handle spot and directional lights
     float distance_squared = dot(to_light, to_light);
     // The unit for point light intensity in KHR_lights_punctual is the candela,
     // which is luminous intensity.
-    float luminous_intensity = light_intensity[i];
+    float luminous_intensity = light_intensity_params[i].x;
     // For PBR rendering, we want the radiant intensity (watts) instead. (I
     // think?) (TODO: The luminosity function is missing here, do we need it?)
     // Formula from: https://en.wikipedia.org/wiki/Luminous_intensity#Usage
