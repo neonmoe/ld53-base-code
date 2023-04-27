@@ -7,8 +7,8 @@ cargo build --release --target wasm32-unknown-emscripten
 
 Then collect the following files into one directory:
 
-- `target/wasm32-unknown-emscripten/release/web_sdl2_test.wasm`
-- `target/wasm32-unknown-emscripten/release/web-sdl2-test.js`
+- `target/wasm32-unknown-emscripten/release/ld53_base_code.wasm`
+- `target/wasm32-unknown-emscripten/release/ld53-base-code.js`
 - `resources/web/index.html`
 
 Point a web server at that directory, and there you go. The HTML file is built

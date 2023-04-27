@@ -139,6 +139,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
+name = "ld53-base-code"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "gl_generator",
+ "glam",
+ "image",
+ "sdl2",
+ "tinyjson",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.141"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -290,19 +303,6 @@ name = "version-compare"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "579a42fc0b8e0c63b76519a339be31bed574929511fa53c1a3acae26eb258f29"
-
-[[package]]
-name = "web-sdl2-test"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "gl_generator",
- "glam",
- "image",
- "sdl2",
- "tinyjson",
-]
 
 [[package]]
 name = "xml-rs"
