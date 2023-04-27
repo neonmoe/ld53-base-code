@@ -1,6 +1,6 @@
 use crate::renderer::bumpalloc_buffer::BumpAllocatedBuffer;
 use crate::renderer::draw_calls::{DrawCall, Uniforms};
-use crate::renderer::gltf::{UniformBlockLights, MAX_LIGHTS};
+use crate::renderer::gltf::MAX_LIGHTS;
 use crate::renderer::{gl, gltf, FORWARD};
 use bytemuck::Zeroable;
 use glam::{Mat4, Quat, Vec3, Vec4};
@@ -114,14 +114,46 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
             Mat4::from_scale_rotation_translation(scale, rotation, translation)
         };
         nodes.push(gltf::Node {
+            name: node["name"].get::<String>().unwrap().clone(),
             mesh_index,
             child_node_indices,
             transform,
+            original_transform: transform,
         });
     }
 
     let accessors_json = gltf["accessors"].get::<Vec<_>>().unwrap();
     let buffer_views_json = gltf["bufferViews"].get::<Vec<_>>().unwrap();
+    let unpack_accessor = |accessor: usize| {
+        let accessor = accessors_json[accessor].get::<HashMap<_, _>>().unwrap();
+        let buffer_view = buffer_views_json[take_usize(&accessor["bufferView"])]
+            .get::<HashMap<_, _>>()
+            .unwrap();
+
+        let buffer = take_usize(&buffer_view["buffer"]);
+        let byte_offset = accessor.get("byteOffset").map(take_usize).unwrap_or(0)
+            + buffer_view.get("byteOffset").map(take_usize).unwrap_or(0);
+        let count = take_usize(&accessor["count"]) as gl::types::GLint;
+        assert!(
+            !buffer_view.contains_key("byteStride"),
+            "byteStride is not supported for attributes"
+        );
+        let size = match accessor["type"].get::<String>().unwrap().as_ref() {
+            "SCALAR" => 1,
+            "VEC2" => 2,
+            "VEC3" => 3,
+            "VEC4" => 4,
+            type_ => panic!("unexpected vertex attribute accessor type \"{type_}\""),
+        };
+        let type_ = take_usize(&accessor["componentType"]) as gl::types::GLuint;
+        let normalized = accessor
+            .get("normalized")
+            .map(|v| *v.get::<bool>().unwrap())
+            .unwrap_or(false);
+
+        (buffer, byte_offset, count, size, type_, normalized)
+    };
+
     let meshes_json = gltf["meshes"].get::<Vec<_>>().unwrap();
     let primitive_count = meshes_json
         .iter()
@@ -142,35 +174,6 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         let mut primitive_indices = Vec::with_capacity(primitives_json.len());
         for primitive_json in primitives_json {
             let primitive_json = primitive_json.get::<HashMap<_, _>>().unwrap();
-            let unpack_accessor = |accessor: usize| {
-                let accessor = accessors_json[accessor].get::<HashMap<_, _>>().unwrap();
-                let buffer_view = buffer_views_json[take_usize(&accessor["bufferView"])]
-                    .get::<HashMap<_, _>>()
-                    .unwrap();
-
-                let buffer = take_usize(&buffer_view["buffer"]);
-                let byte_offset = accessor.get("byteOffset").map(take_usize).unwrap_or(0)
-                    + buffer_view.get("byteOffset").map(take_usize).unwrap_or(0);
-                let count = take_usize(&accessor["count"]) as gl::types::GLint;
-                assert!(
-                    !buffer_view.contains_key("byteStride"),
-                    "byteStride is not supported for attributes"
-                );
-                let size = match accessor["type"].get::<String>().unwrap().as_ref() {
-                    "SCALAR" => 1,
-                    "VEC2" => 2,
-                    "VEC3" => 3,
-                    "VEC4" => 4,
-                    type_ => panic!("unexpected vertex attribute accessor type \"{type_}\""),
-                };
-                let type_ = take_usize(&accessor["componentType"]) as gl::types::GLuint;
-                let normalized = accessor
-                    .get("normalized")
-                    .map(|v| *v.get::<bool>().unwrap())
-                    .unwrap_or(false);
-
-                (buffer, byte_offset, count, size, type_, normalized)
-            };
 
             let primitive_index = primitives.len();
             let material_index = take_usize(&primitive_json["material"]);
@@ -444,10 +447,14 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
     gl_buffers.push(uniform_buffer_allocator.get_buffer(true));
 
     // KHR_lights_punctual extension:
-    let lights_json = gltf["extensions"]["KHR_lights_punctual"]["lights"]
-        .get::<Vec<_>>()
-        .unwrap();
-    let mut lights = UniformBlockLights::zeroed();
+    let lights_json_fallback = Vec::with_capacity(0);
+    let lights_json = gltf
+        .get("extensions")
+        .and_then(|v| v.get::<HashMap<_, _>>().unwrap().get("KHR_lights_punctual"))
+        .and_then(|v| v.get::<HashMap<_, _>>().unwrap().get("lights"))
+        .map(|v| v.get::<Vec<_>>().unwrap())
+        .unwrap_or(&lights_json_fallback);
+    let mut lights = gltf::UniformBlockLights::zeroed();
     let mut light_node_index = 0;
     for (node_index, node) in nodes_json.into_iter().enumerate() {
         if let Some(khr_lights_punctual) = node
@@ -607,12 +614,69 @@ pub fn load_gltf(gltf: &str, resources: &[(&str, &[u8])]) -> gltf::Gltf {
         ];
 
         materials.push(gltf::Material {
+            name: material["name"].get::<String>().unwrap().clone(),
             uniforms: Uniforms { textures, ubos },
+        });
+    }
+
+    let animations_json_fallback = Vec::with_capacity(0);
+    let animations_json = gltf
+        .get("animations")
+        .map(|v| v.get::<Vec<_>>().unwrap())
+        .unwrap_or(&animations_json_fallback);
+    let mut animations = Vec::with_capacity(animations_json.len());
+    for animation in animations_json {
+        let name = animation["name"].get::<String>().unwrap().to_string();
+        let mut start = f32::INFINITY;
+        let mut end = f32::NEG_INFINITY;
+        let mut nodes_animations = vec![Vec::new(); nodes.len()];
+        let samplers = animation["samplers"].get::<Vec<_>>().unwrap();
+        for channel in animation["channels"].get::<Vec<_>>().unwrap() {
+            let get_accessor_slice = |accessor: usize, bpc: usize| {
+                let (buffer, offset, count, ..) = unpack_accessor(accessor);
+                let length = count as usize * bpc;
+                get_buffer_slice(buffer, offset, length)
+            };
+
+            let sampler = &samplers[take_usize(&channel["sampler"])];
+            let node = take_usize(&channel["target"]["node"]);
+            let path = channel["target"]["path"].get::<String>().unwrap().as_str();
+            let input_accessor = take_usize(&sampler["input"]);
+            let input = get_accessor_slice(input_accessor, 4);
+            let output_bpc = if path == "rotation" { 16 } else { 12 };
+            let output = get_accessor_slice(take_usize(&sampler["output"]), output_bpc);
+            let timestamps = bytemuck::pod_collect_to_vec(input);
+            start = start.min(timestamps[0]);
+            end = end.max(timestamps[timestamps.len() - 1]);
+            let keyframes = match path {
+                "translation" => gltf::Keyframes::Translation(bytemuck::pod_collect_to_vec(output)),
+                "rotation" => gltf::Keyframes::Rotation(bytemuck::pod_collect_to_vec(output)),
+                "scale" => gltf::Keyframes::Scale(bytemuck::pod_collect_to_vec(output)),
+                target => panic!("unsupported animation target '{target}'"),
+            };
+            let interpolation = match sampler["interpolation"].get::<String>().unwrap().as_str() {
+                "STEP" => gltf::Interpolation::Step,
+                "LINEAR" => gltf::Interpolation::Linear,
+                "CUBICSPLINE" => gltf::Interpolation::CubicSpline,
+                interp => panic!("invalid interpolation '{interp}'"),
+            };
+            nodes_animations[node].push(gltf::NodeAnimation {
+                timestamps,
+                keyframes,
+                interpolation,
+            });
+        }
+        animations.push(gltf::Animation {
+            name,
+            nodes_animations,
+            start,
+            length: end - start,
         });
     }
 
     gltf::Gltf {
         scene,
+        animations,
         scenes,
         nodes,
         meshes,

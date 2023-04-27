@@ -2,22 +2,17 @@ use crate::renderer::draw_calls::{DrawCall, DrawCalls, Uniforms};
 use crate::renderer::gl;
 use glam::Mat4;
 
+mod animation;
 mod loader;
 mod program;
 
+pub use animation::*;
 pub use loader::load_gltf;
 pub use program::*;
 
-// Rendering plan for gltfs:
-// rendering state for each frame HashMap<Material, HashMap<Primitive, Vec<Transform>>>
-// which map to opengl state changes as follows:
-// - each material corresponds to uniform changes
-// - each primitive corresponds to a VAO bind
-// - transforms are collected into a vertex buffer, which is indexed per-instance (glVertexAttribDivisor)
-// - finally, glDrawElementsInstanced() with the instance count being the length of the transform vec
-
 pub struct Gltf {
     pub scene: usize,
+    pub animations: Vec<Animation>,
     scenes: Vec<Scene>,
     nodes: Vec<Node>,
     meshes: Vec<Mesh>,
@@ -31,39 +26,63 @@ pub struct Gltf {
 }
 
 pub struct Scene {
-    pub node_indices: Vec<usize>,
+    node_indices: Vec<usize>,
 }
 
 pub struct Node {
-    pub mesh_index: Option<usize>,
-    pub child_node_indices: Vec<usize>,
+    pub name: String,
     pub transform: Mat4,
+    pub original_transform: Mat4,
+    mesh_index: Option<usize>,
+    child_node_indices: Vec<usize>,
 }
 
 pub struct Mesh {
-    pub primitive_indices: Vec<usize>,
+    primitive_indices: Vec<usize>,
 }
 
 pub struct Primitive {
-    pub material_index: usize,
     pub draw_call: DrawCall,
+    material_index: usize,
 }
 
 pub struct Material {
+    pub name: String,
     pub uniforms: Uniforms,
 }
 
 impl Gltf {
     pub fn draw(&self, draw_calls: &mut DrawCalls, model_transform: Mat4) {
+        self._draw(draw_calls, model_transform, |i| self.nodes[i].transform)
+    }
+
+    pub fn draw_animated(
+        &self,
+        draw_calls: &mut DrawCalls,
+        model_transform: Mat4,
+        node_transforms: &[NodeTransform],
+    ) {
+        self._draw(draw_calls, model_transform, |i| {
+            node_transforms[i].transform
+        })
+    }
+
+    #[inline]
+    fn _draw<F: Fn(usize) -> Mat4>(
+        &self,
+        draw_calls: &mut DrawCalls,
+        model_transform: Mat4,
+        get_transform: F,
+    ) {
         let scene = &self.scenes[self.scene];
         let mut node_queue = scene
             .node_indices
             .iter()
-            .map(|&i| (model_transform, &self.nodes[i]))
+            .map(|&i| (model_transform, i))
             .collect::<Vec<_>>();
-        while let Some((parent_transform, node)) = node_queue.pop() {
-            let transform = parent_transform * node.transform;
-            if let Some(mesh_index) = node.mesh_index {
+        while let Some((parent_transform, node_index)) = node_queue.pop() {
+            let transform = parent_transform * get_transform(node_index);
+            if let Some(mesh_index) = self.nodes[node_index].mesh_index {
                 for &primitive_index in &self.meshes[mesh_index].primitive_indices {
                     let primitive = &self.primitives[primitive_index];
                     let uniforms = &self.materials[primitive.material_index].uniforms;
@@ -75,8 +94,8 @@ impl Gltf {
                     draw_calls.add(uniforms, &draw_call, transform);
                 }
             }
-            for &child_index in &node.child_node_indices {
-                node_queue.push((transform, &self.nodes[child_index]));
+            for &child_index in &self.nodes[node_index].child_node_indices {
+                node_queue.push((transform, child_index));
             }
         }
     }

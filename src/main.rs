@@ -9,6 +9,7 @@ use std::ffi::{c_int, c_void};
 use std::fmt::Display;
 use std::panic;
 use std::ptr;
+use std::time::Instant;
 
 #[cfg(target_family = "wasm")]
 mod emscripten_h;
@@ -18,10 +19,10 @@ use renderer::Renderer;
 
 fn main() {
     panic::set_hook(Box::new(|panic_info| {
-        exit_with_error(panic_info);
+        display_error(panic_info);
     }));
     if let Err(err) = _main() {
-        exit_with_error(format!("{:?}", err));
+        display_error(format!("{:?}", err));
     }
 }
 
@@ -133,6 +134,8 @@ struct State {
     event_pump: EventPump,
     mouse_position: Point,
     renderer: Renderer,
+    time: f32,
+    last_frame: Instant,
 }
 
 impl State {
@@ -142,6 +145,8 @@ impl State {
             window,
             event_pump,
             mouse_position: Point::new(0, 0),
+            time: 0.0,
+            last_frame: Instant::now(),
         }
     }
 }
@@ -152,6 +157,8 @@ extern "C" fn run_frame() {
         mouse_position,
         renderer,
         window,
+        time,
+        last_frame,
         ..
     } = unsafe { &mut STATE }.as_mut().unwrap();
 
@@ -171,12 +178,16 @@ extern "C" fn run_frame() {
         }
     }
 
+    let now = Instant::now();
+    *time += (now - *last_frame).as_secs_f32();
+    *last_frame = now;
+
     let (w, h) = window.drawable_size();
-    renderer.render(w as f32 / h as f32);
+    renderer.render(w as f32 / h as f32, *time);
     window.gl_swap_window();
 }
 
-fn exit_with_error<D: Display>(err: D) -> ! {
+fn display_error<D: Display>(err: D) {
     #[cfg(target_family = "wasm")]
     emscripten_h::run_javascript(
         &format!(
@@ -198,7 +209,6 @@ fn exit_with_error<D: Display>(err: D) -> ! {
             window,
         );
     }
-    std::process::exit(1)
 }
 
 #[derive(Debug)]
